@@ -218,9 +218,10 @@ func marginBorrow(exchange *OpenExchange, availability *model.MarginAvailability
 
 	glog.Infof("借币 currency:%s amount:%s\n", borrowParam["currency"], borrowParam["amount"])
 	return &Borrow{
-		ID:       borrow.BorrowID,
-		Currency: borrowParam["currency"],
-		Amount:   borrowParam["amount"],
+		ID:           borrow.BorrowID,
+		Currency:     borrowParam["currency"],
+		Amount:       borrowParam["amount"],
+		InstrumentId: exchange.InstrumentId,
 	}
 }
 
