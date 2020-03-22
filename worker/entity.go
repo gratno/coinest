@@ -19,6 +19,7 @@ type ClosedInfo struct {
 	MarkPrice decimal.Decimal
 	Income    decimal.Decimal
 	Amount    decimal.Decimal
+	Stop      bool
 }
 
 type OpenedExchangeInfo struct {

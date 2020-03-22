@@ -41,6 +41,24 @@ type MarginBorrow struct {
 	Result    bool   `json:"result"`
 }
 
+type MarginBorrowed struct {
+	Amount           string    `json:"amount"`
+	BorrowID         string    `json:"borrow_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	Currency         string    `json:"currency"`
+	ForceRepayTime   time.Time `json:"force_repay_time"`
+	InstrumentID     string    `json:"instrument_id"`
+	Interest         string    `json:"interest"`
+	LastInterestTime time.Time `json:"last_interest_time"`
+	PaidInterest     string    `json:"paid_interest"`
+	ProductID        string    `json:"product_id"`
+	Rate             string    `json:"rate"`
+	RepayAmount      string    `json:"repay_amount"`
+	RepayInterest    string    `json:"repay_interest"`
+	ReturnedAmount   string    `json:"returned_amount"`
+	Timestamp        time.Time `json:"timestamp"`
+}
+
 type MarginBRepay struct {
 	ClientOid   string `json:"client_oid"`
 	RepaymentID string `json:"repayment_id"`

@@ -63,7 +63,7 @@ func hedgeWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 			continue
 		}
 
-		if stop(closedInfo.Income) {
+		if closedInfo.Stop {
 			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s \n", closedInfo.Income, expect)
 			return closedInfo
 		}

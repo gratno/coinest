@@ -62,7 +62,8 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	}
 
 	d := swapIncome.Add(marginIncome).Sub(SwapMark.Mul(decimal.NewFromFloat(0.001)))
-	if !stop(d) {
+	closedInfo.Stop = stop(d)
+	if !closedInfo.Stop {
 		closedInfo.Income = d
 		return closedInfo, nil
 	}
@@ -168,8 +169,8 @@ func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool)
 	size = amount.Truncate(4).String()
 
 	closedInfo.Income = marginIncome
-
-	if !stop(marginIncome) {
+	closedInfo.Stop = stop(marginIncome)
+	if !closedInfo.Stop {
 		return closedInfo, nil
 	}
 	glog.Infof("可以收手了!!! 预计收益:$ %s 标记价格趋势:%s \n", marginIncome.Truncate(2), markPriceInc)

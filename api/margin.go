@@ -195,9 +195,6 @@ func MarginMarkPrice(instrumentId string) (*model.MarginMarkPrice, error) {
 }
 
 func MarginAccount(instrumentId string) (*model.MarginAccount, error) {
-	if instrumentId == "" {
-		panic("instrumentId is em")
-	}
 	URL := fmt.Sprintf("/api/margin/v3/accounts/%s", instrumentId)
 	req := NewRequest("GET", URL, nil)
 	response, err := httpClient.Do(req)
@@ -223,6 +220,27 @@ func MarginAccount(instrumentId string) (*model.MarginAccount, error) {
 		return nil, fmt.Errorf("bad body %s", string(b))
 	}
 	return &account, nil
+}
+
+func MarginBorrowed(instrumentId string) ([]*model.MarginBorrowed, error) {
+	URL := fmt.Sprintf("/api/margin/v3/accounts/%s/borrowed?limit=10&status=0", instrumentId)
+	req := NewRequest("GET", URL, nil)
+	response, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpClient.Do failed! err: %w", err)
+	}
+	defer response.Body.Close()
+	b, _ := ioutil.ReadAll(response.Body)
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("GET %s failed! bad status code: %d body:%s", URL, response.StatusCode, string(b))
+	}
+
+	var borrowed []*model.MarginBorrowed
+	err = json.Unmarshal(b, &borrowed)
+	if err != nil {
+		return nil, fmt.Errorf("json.Decode failed! err: %w", err)
+	}
+	return borrowed, nil
 }
 
 func MarginOrderDetail(instrumentId string, orderId string) (*model.MarginOrderDetail, error) {

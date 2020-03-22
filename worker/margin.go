@@ -100,7 +100,7 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 			continue
 		}
 
-		if stop(closedInfo.Income) {
+		if closedInfo.Stop {
 			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s \n", closedInfo.Income, exchange.TradeType, expect)
 			return closedInfo
 		}
@@ -118,12 +118,13 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 func queryOrder(instrumentId, id string) string {
 	t0 := time.Now()
 	for {
-		if time.Since(t0) > 30*time.Second {
+		if time.Since(t0) > 60*time.Second {
 			if err := api.MarginCancelOrder(id, instrumentId); err != nil {
 				glog.Errorln("取消订单失败!", err)
 				time.Sleep(time.Second)
 				continue
 			}
+			glog.Infoln("取消订单成功!", id)
 			break
 		}
 		detail, err := api.MarginOrderDetail(instrumentId, id)

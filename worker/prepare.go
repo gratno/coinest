@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -81,7 +82,7 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 	return swapExchange, nil
 }
 
-func preOpenMargin(instrumentId string, needBorrow bool, hook func(trade config.TradeType) bool) (*OpenExchange, error) {
+func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func(trade config.TradeType) bool) (*OpenExchange, error) {
 	exchange := &OpenExchange{
 		Name:         "币币杠杆",
 		InstrumentId: instrumentId,
@@ -92,9 +93,13 @@ func preOpenMargin(instrumentId string, needBorrow bool, hook func(trade config.
 
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
-		exchange.TradeType = config.OPEN_EMPTY
+		if reverse {
+			exchange.TradeType = config.OPEN_EMPTY
+		}
 	case config.OPEN_EMPTY:
-		exchange.TradeType = config.OPEN_MANY
+		if reverse {
+			exchange.TradeType = config.OPEN_MANY
+		}
 	case config.OPEN_PAUSE:
 		return nil, ErrOpenSuspend
 	}
@@ -117,6 +122,21 @@ func preOpenMargin(instrumentId string, needBorrow bool, hook func(trade config.
 	})
 
 	if needBorrow {
+		if borroweds, err := api.MarginBorrowed(instrumentId); err == nil {
+			btc, _ := decimal.NewFromString(availability.CurrencyBTC.Available)
+			usdt, _ := decimal.NewFromString(availability.CurrencyUSDT.Available)
+			for _, v := range borroweds {
+				brr, _ := decimal.NewFromString(v.Amount)
+				switch strings.ToLower(v.Currency) {
+				case "btc":
+					btc = btc.Sub(brr)
+				case "usdt":
+					usdt = usdt.Sub(brr)
+				}
+			}
+			availability.CurrencyUSDT.Available = usdt.String()
+			availability.CurrencyBTC.Available = btc.String()
+		}
 		if borrow := marginBorrow(exchange, availability); borrow != nil {
 			exchange.Borrow = borrow
 		}
