@@ -14,12 +14,21 @@ type Borrow struct {
 	InstrumentId string
 }
 
-type ClosedInfo struct {
-	TradeType config.TradeType
-	MarkPrice decimal.Decimal
-	Income    decimal.Decimal
-	Amount    decimal.Decimal
-	Stop      bool
+type CloseExchange struct {
+	Name        string
+	TradeType   config.TradeType
+	MarkPrice   decimal.Decimal
+	Income      decimal.Decimal
+	Amount      decimal.Decimal
+	Liquidation decimal.Decimal
+	Stop        bool
+}
+
+type ClosedExchangeInfo struct {
+	Swap   *CloseExchange
+	Margin *CloseExchange
+	Income decimal.Decimal
+	Stop   bool
 }
 
 type OpenedExchangeInfo struct {
@@ -41,6 +50,8 @@ type OpenExchange struct {
 	CreateAt     time.Time
 	InstrumentId string
 	Params       map[string]string
+	// 强平价
+	Liquidation decimal.Decimal
 }
 
 func (e OpenExchange) String() string {

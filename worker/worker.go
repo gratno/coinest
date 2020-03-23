@@ -19,12 +19,12 @@ func StartHedge(count ...int) {
 	if len(count) > 0 {
 		num = count[0]
 	}
-	var lastClosedInfo *ClosedInfo
+	var lastCloseExchange *ClosedExchangeInfo
 	for i := 0; i < num; i++ {
 		fmt.Printf("\n\n")
 		t0 := time.Now()
-		if closedInfo := hedgeWorker(lastClosedInfo); closedInfo != nil {
-			lastClosedInfo = closedInfo
+		if closeExchange := hedgeWorker(lastCloseExchange); closeExchange != nil {
+			lastCloseExchange = closeExchange
 		}
 		d := time.Since(t0)
 		if d > 10*time.Second {
@@ -42,12 +42,12 @@ func StartMargin(count ...int) {
 	if len(count) > 0 {
 		num = count[0]
 	}
-	var lastClosedInfo *ClosedInfo
+	var lastCloseExchange *CloseExchange
 	for i := 0; i < num; i++ {
 		fmt.Printf("\n\n")
 		t0 := time.Now()
-		if closedInfo := marginWorker(lastClosedInfo); closedInfo != nil {
-			lastClosedInfo = closedInfo
+		if closeExchange := marginWorker(lastCloseExchange); closeExchange != nil {
+			lastCloseExchange = closeExchange
 		}
 		d := time.Since(t0)
 		if d > 10*time.Second {

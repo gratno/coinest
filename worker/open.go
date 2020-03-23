@@ -23,13 +23,13 @@ func openHedge(needBorrow bool) (*OpenedExchangeInfo, error) {
 	marginExchange.Params["size"] = swapExchange.Amount.Truncate(2).String()
 	group := errgroup.Group{}
 	group.Go(func() error {
-		marginExchange.OrderId = mustMarginOrder(marginExchange.Params, 0)
+		marginExchange.OrderId = mustMarginOrder(marginExchange.Params)
 		return nil
 	})
 
 	group.Go(func() error {
 		glog.Infof("合约预下订单 params:%+v\n", swapExchange.Params)
-		swapExchange.OrderId = mustSwapOrder(swapExchange.Params, 0)
+		swapExchange.OrderId = mustSwapOrder(swapExchange.Params)
 		return nil
 	})
 
@@ -46,7 +46,7 @@ func openMargin(needBorrow bool, hook func(trade config.TradeType) bool) (*OpenE
 	}
 	glog.Infof("币币杠杆下单 params:%+v\n", exchange.Params)
 
-	orderId := mustMarginOrder(exchange.Params, -1)
+	orderId := mustMarginOrder(exchange.Params)
 
 	exchange.OrderId = orderId
 	exchange.Amount, _ = decimal.NewFromString(exchange.Params["size"])

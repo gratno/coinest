@@ -11,7 +11,20 @@ import (
 	"time"
 )
 
-func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) bool) (*ClosedInfo, error) {
+func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) bool) (*ClosedExchangeInfo, error) {
+	closedInfo := &ClosedExchangeInfo{
+		Swap: &CloseExchange{
+			Name:      openInfo.Swap.Name,
+			TradeType: openInfo.Swap.TradeType,
+			Amount:    openInfo.Swap.Amount,
+		},
+		Margin: &CloseExchange{
+			Name:        openInfo.Margin.Name,
+			TradeType:   openInfo.Margin.TradeType,
+			Liquidation: openInfo.Margin.Liquidation,
+			Amount:      openInfo.Margin.Amount,
+		},
+	}
 	position, err := api.SwapInstrumentPosition(openInfo.Swap.InstrumentId)
 	if err != nil {
 		return nil, fmt.Errorf("获取持仓信息失败！ err:%w", err)
@@ -20,6 +33,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		return nil, fmt.Errorf("未检测到仓位")
 	}
 	holding := position.Holding[0]
+	closedInfo.Swap.Liquidation, _ = decimal.NewFromString(holding.LiquidationPrice)
 	price, err := api.SwapMarkPrice(openInfo.Swap.InstrumentId)
 	if err != nil {
 		return nil, fmt.Errorf("获取合约标记价格失败! err:%w", err)
@@ -27,6 +41,8 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	swapIncome, _ := decimal.NewFromString(holding.UnrealizedPnl)
 	SwapMark, _ := decimal.NewFromString(price.MarkPrice)
 	swapIncome = swapIncome.Sub(decimal.NewFromFloat(0.002)).Mul(SwapMark)
+	closedInfo.Swap.MarkPrice = SwapMark
+	closedInfo.Swap.Income = swapIncome
 	detail, err := api.MarginOrderDetail(openInfo.Margin.InstrumentId, openInfo.Margin.OrderId)
 	if err != nil {
 		return nil, fmt.Errorf("获取币币杠杆订单详情失败! err:%w", err)
@@ -40,16 +56,13 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		return nil, fmt.Errorf("获取币币杠杆标记价格失败! err:%w", err)
 	}
 	markPrice, _ := decimal.NewFromString(mark.MarkPrice)
+	closedInfo.Margin.MarkPrice = markPrice
 
 	glog.Infof("币币杠杆标记价格 old:%s new:%s action:%s\n", openInfo.Margin.MarkPrice, mark.MarkPrice, openInfo.Margin.TradeType)
 	marginIncome = marginIncome.Sub(markPrice.Mul(openInfo.Margin.Amount))
 
 	var (
-		side       string
-		closedInfo = &ClosedInfo{
-			TradeType: openInfo.Margin.TradeType,
-			MarkPrice: markPrice,
-		}
+		side string
 	)
 
 	switch openInfo.Margin.TradeType {
@@ -58,15 +71,27 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		marginIncome = marginIncome.Neg()
 	case config.OPEN_EMPTY:
 		side = "buy"
-
 	}
 
+	closedInfo.Margin.Income = marginIncome
 	d := swapIncome.Add(marginIncome).Sub(SwapMark.Mul(decimal.NewFromFloat(0.001)))
+	closedInfo.Income = d
 	closedInfo.Stop = stop(d)
+
+	boom := func(exchange CloseExchange) bool {
+		if boomBunker(exchange) {
+			glog.Infof("%s 达到爆仓点，快收手! mark_price:%s liquidation:%s\n", exchange.Name, exchange.MarkPrice, exchange.Liquidation)
+			return true
+		}
+		return false
+	}
+	if boom(*closedInfo.Swap) || boom(*closedInfo.Margin) {
+		goto exit
+	}
 	if !closedInfo.Stop {
-		closedInfo.Income = d
 		return closedInfo, nil
 	}
+exit:
 	glog.Infof("可以收手了!!! 预计收益:$ %s \n", d.Truncate(2))
 	var swapCloseTrade config.TradeType
 	switch openInfo.Swap.TradeType {
@@ -84,7 +109,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		"match_price":   "1",
 		"instrument_id": openInfo.Swap.InstrumentId,
 		"price":         SwapMark.String(),
-	}, 0)
+	})
 
 	marginOrder := mustMarginOrder(map[string]string{
 		"client_oid":     genRandClientId(),
@@ -95,7 +120,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		"order_type":     "0",
 		"size":           openInfo.Margin.Amount.Truncate(4).String(),
 		"price":          markPrice.String(),
-	}, 0)
+	})
 
 	full := waitFinished(map[string]string{"instrument_id": openInfo.Swap.InstrumentId, "order_id": swapOrder},
 		map[string]string{"instrument_id": openInfo.Margin.InstrumentId, "order_id": marginOrder})
@@ -120,7 +145,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	return closedInfo, nil
 }
 
-func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool) (*ClosedInfo, error) {
+func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool) (*CloseExchange, error) {
 	account, err := api.MarginAccount(exchange.InstrumentId)
 	if err != nil {
 		return nil, fmt.Errorf("获取账户信息失败! err:%w", err)
@@ -148,7 +173,7 @@ func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool)
 		side       string
 		amount     decimal.Decimal
 		size       string
-		closedInfo = &ClosedInfo{
+		closedInfo = &CloseExchange{
 			TradeType: exchange.TradeType,
 			MarkPrice: markPrice,
 		}
@@ -170,9 +195,14 @@ func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool)
 
 	closedInfo.Income = marginIncome
 	closedInfo.Stop = stop(marginIncome)
+	if boomBunker(*closedInfo) {
+		glog.Infof("%s 达到爆仓点，快收手! mark_price:%s liquidation:%s\n", exchange.Name, exchange.MarkPrice, exchange.Liquidation)
+		goto exit
+	}
 	if !closedInfo.Stop {
 		return closedInfo, nil
 	}
+exit:
 	glog.Infof("可以收手了!!! 预计收益:$ %s 标记价格趋势:%s \n", marginIncome.Truncate(2), markPriceInc)
 
 	params := map[string]string{
@@ -196,7 +226,7 @@ func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool)
 		}
 	}
 
-	marginOrder := mustMarginOrder(params, 0)
+	marginOrder := mustMarginOrder(params)
 
 	glog.Infof("等待平仓订单完成... price:%s\n", markPrice)
 
@@ -262,4 +292,17 @@ func waitFinished(swap map[string]string, margin map[string]string) string {
 	}
 	wg.Wait()
 	return total
+}
+
+func boomBunker(exchange CloseExchange) bool {
+	risk := decimal.NewFromFloat(0.98)
+	switch exchange.TradeType {
+	case config.OPEN_MANY:
+		exchange.Liquidation = exchange.Liquidation.Div(risk)
+		return exchange.MarkPrice.GreaterThan(exchange.Liquidation)
+	case config.OPEN_EMPTY:
+		exchange.Liquidation = exchange.Liquidation.Mul(risk)
+		return exchange.MarkPrice.LessThan(exchange.Liquidation)
+	}
+	return false
 }

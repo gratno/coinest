@@ -8,23 +8,34 @@ import (
 	"time"
 )
 
-func hedgeWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
-	openInfo, err := openHedge(true)
-	if err != nil {
-		glog.Errorln("开仓失败！", err)
-		return nil
+func hedgeWorker(lastClosedInfo *ClosedExchangeInfo) *ClosedExchangeInfo {
+	var (
+		openInfo *OpenedExchangeInfo
+		err      error
+		borrow   *Borrow
+	)
+	for {
+		openInfo, err = openHedge(borrow == nil)
+		if openInfo != nil && openInfo.Margin != nil && borrow == nil {
+			borrow = openInfo.Margin.Borrow
+		}
+		if err != nil {
+			glog.Errorln("开仓失败！", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		break
 	}
 
 	defer func() {
-		exchange := openInfo.Margin
-		if exchange.Borrow != nil {
+		if borrow != nil {
 			if _, err := api.MarginRepay(map[string]string{
-				"borrow_id":     exchange.Borrow.ID,
-				"instrument_id": exchange.InstrumentId,
-				"currency":      exchange.Borrow.Currency,
-				"amount":        exchange.Borrow.Amount,
+				"borrow_id":     borrow.ID,
+				"instrument_id": borrow.InstrumentId,
+				"currency":      borrow.Currency,
+				"amount":        borrow.Amount,
 			}); err != nil {
-				glog.Infof("还币失败! borrow:%+v err:%s\n", exchange.Borrow, err)
+				glog.Infof("还币失败! borrow:%+v err:%s\n", borrow, err)
 			}
 		}
 	}()

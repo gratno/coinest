@@ -149,6 +149,8 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 
 	glog.Infof("当前币币杠杆账户:%+v\n", account)
 
+	exchange.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
+
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
 		if d, _ := decimal.NewFromString(account.CurrencyUSDT.Available); d.LessThan(decimal.NewFromInt(1)) {
@@ -249,7 +251,11 @@ func genRandClientId() string {
 	return "a" + strconv.FormatInt(int64(rand.Int31()), 10)
 }
 
-func mustSwapOrder(params map[string]string, delta int) string {
+func mustSwapOrder(params map[string]string) string {
+	delta := 0
+	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) {
+		delta = -1
+	}
 	for i := 0; i < 50; i++ {
 		orderId, err := api.SwapOrder(params)
 		if err != nil {
@@ -268,7 +274,11 @@ func mustSwapOrder(params map[string]string, delta int) string {
 	panic("mustSwapOrder exceed max retry")
 }
 
-func mustMarginOrder(params map[string]string, delta float64) string {
+func mustMarginOrder(params map[string]string) string {
+	delta := float64(0)
+	if params["side"] == "buy" {
+		delta = -1
+	}
 	for i := 0; i < 50; i++ {
 		orderId, err := api.MarginOrder(params)
 		if err != nil {

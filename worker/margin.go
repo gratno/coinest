@@ -14,32 +14,32 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
-func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
+func marginWorker(lastCloseExchange *CloseExchange) *CloseExchange {
 	var (
-		exchange *OpenExchange
-		borrow   *Borrow
-		err      error
+		openExchange *OpenExchange
+		borrow       *Borrow
+		err          error
 	)
 	for {
-		exchange, err = openMargin(borrow == nil, func(trade config.TradeType) bool {
-			if lastClosedInfo == nil {
+		openExchange, err = openMargin(borrow == nil, func(trade config.TradeType) bool {
+			if lastCloseExchange == nil {
 				return true
 			}
 			if price, err := api.MarginMarkPrice("BTC-USDT"); err == nil {
 				p, _ := decimal.NewFromString(price.MarkPrice)
-				glog.Infof("预开方向:%s 新市价:%s 上次平价:%s \n", trade, p, lastClosedInfo.MarkPrice)
+				glog.Infof("预开方向:%s 新市价:%s 上次平价:%s \n", trade, p, lastCloseExchange.MarkPrice)
 				switch trade {
 				case config.OPEN_MANY:
-					return p.LessThan(lastClosedInfo.MarkPrice)
+					return p.LessThan(lastCloseExchange.MarkPrice)
 				case config.OPEN_EMPTY:
-					return p.GreaterThan(lastClosedInfo.MarkPrice)
+					return p.GreaterThan(lastCloseExchange.MarkPrice)
 				}
 			}
 			return false
 		})
 
-		if exchange != nil && borrow == nil {
-			borrow = exchange.Borrow
+		if openExchange != nil && borrow == nil {
+			borrow = openExchange.Borrow
 		}
 
 		if err != nil {
@@ -47,8 +47,8 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 			time.Sleep(10 * time.Second)
 			continue
 		}
-		glog.Infof("等待开仓订单完成! mark_price:%s\n", exchange.MarkPrice)
-		if fill := queryOrder(exchange.InstrumentId, exchange.OrderId); fill == "" {
+		glog.Infof("等待开仓订单完成! mark_price:%s\n", openExchange.MarkPrice)
+		if fill := queryOrder(openExchange.InstrumentId, openExchange.OrderId); fill == "" {
 			glog.Warningln("重新开仓，订单已撤销！")
 			time.Sleep(5 * time.Second)
 			continue
@@ -64,14 +64,14 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 				"currency":      borrow.Currency,
 				"amount":        borrow.Amount,
 			}); err != nil {
-				glog.Infof("还币失败! borrow:%+v err:%s\n", exchange.Borrow, err)
+				glog.Infof("还币失败! borrow:%+v err:%s\n", openExchange.Borrow, err)
 			}
 		}
 	}()
 
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
-	total := exchange.MarkPrice.Mul(exchange.Amount)
+	total := openExchange.MarkPrice.Mul(openExchange.Amount)
 	expect := total.Mul(decimal.NewFromFloat(point / 100))
 	glog.Infof("余额:%s 任务需直到收益超过 %s 时结束！\n", total.Truncate(4), expect.Truncate(4))
 	var lastIncome decimal.Decimal
@@ -90,7 +90,7 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 		return false
 	}
 	for {
-		closedInfo, err := closeMargin(exchange, stop)
+		closeExchange, err := closeMargin(openExchange, stop)
 		if err != nil {
 			glog.Errorln("关仓失败! 1s后继续。。。", err)
 			time.Sleep(3 * time.Second)
@@ -100,16 +100,16 @@ func marginWorker(lastClosedInfo *ClosedInfo) *ClosedInfo {
 			continue
 		}
 
-		if closedInfo.Stop {
-			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s \n", closedInfo.Income, exchange.TradeType, expect)
-			return closedInfo
+		if closeExchange.Stop {
+			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s \n", closeExchange.Income, openExchange.TradeType, expect)
+			return closeExchange
 		}
 
-		lastIncome = closedInfo.Income
+		lastIncome = closeExchange.Income
 
 		select {
 		case <-ticker.C:
-			glog.Infof("继续努力， 当前收益:$ %s  expect:%s\n", closedInfo.Income, expect)
+			glog.Infof("继续努力， 当前收益:$ %s  expect:%s\n", closeExchange.Income, expect)
 		}
 	}
 
