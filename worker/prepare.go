@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -139,6 +140,8 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 		}
 		if borrow := marginBorrow(exchange, availability); borrow != nil {
 			exchange.Borrow = borrow
+		} else {
+			os.Exit(1)
 		}
 	}
 
@@ -283,7 +286,7 @@ func mustMarginOrder(params map[string]string) string {
 		if err != nil {
 			glog.Errorln("杠杆下单失败! ", err)
 			size, _ := strconv.ParseFloat(params["size"], 64)
-			if t := size + delta*0.001; t > 0 {
+			if t := size + delta*0.002; t > 0 {
 				size = t
 			}
 			params["size"] = strconv.FormatFloat(size, 'g', -1, 64)

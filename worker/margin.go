@@ -73,7 +73,7 @@ func marginWorker(lastCloseExchange *CloseExchange) *CloseExchange {
 	defer ticker.Stop()
 	total := openExchange.MarkPrice.Mul(openExchange.Amount)
 	expect := total.Mul(decimal.NewFromFloat(point / 100))
-	glog.Infof("归零值:%s 余额:%s 任务需直到收益超过 %s 时结束！\n", openExchange.Liquidation, total.Truncate(4), expect.Truncate(4))
+	glog.Infof("余额:%s 任务需直到收益超过 %s 时结束！\n", total.Truncate(4), expect.Truncate(4))
 	var lastIncome decimal.Decimal
 
 	once := true
@@ -101,7 +101,7 @@ func marginWorker(lastCloseExchange *CloseExchange) *CloseExchange {
 		}
 
 		if closeExchange.Stop {
-			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s \n", closeExchange.Income, openExchange.TradeType, expect)
+			glog.Infof("一次任务完成!!! 收益:$ %s trade_type:%s expect:%s 归零值:%s\n", closeExchange.Income, openExchange.TradeType, expect, openExchange.Liquidation)
 			return closeExchange
 		}
 

@@ -32,8 +32,21 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	if len(position.Holding) == 0 {
 		return nil, fmt.Errorf("未检测到仓位")
 	}
+	if openInfo.Margin.Liquidation.IsZero() {
+		account, err := api.MarginAccount(openInfo.Margin.InstrumentId)
+		if err != nil {
+			return nil, fmt.Errorf("获取账户信息失败! err:%w", err)
+		}
+		openInfo.Margin.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
+		glog.Infoln("初始化币币杠杆归零值:", openInfo.Margin.Liquidation)
+	}
+
 	holding := position.Holding[0]
 	closedInfo.Swap.Liquidation, _ = decimal.NewFromString(holding.LiquidationPrice)
+	if openInfo.Swap.Liquidation.IsZero() {
+		openInfo.Swap.Liquidation = closedInfo.Swap.Liquidation
+		glog.Infoln("初始化永续合约归零值:", openInfo.Swap.Liquidation)
+	}
 	price, err := api.SwapMarkPrice(openInfo.Swap.InstrumentId)
 	if err != nil {
 		return nil, fmt.Errorf("获取合约标记价格失败! err:%w", err)
@@ -150,6 +163,9 @@ func closeMargin(exchange *OpenExchange, stop func(income decimal.Decimal) bool)
 	account, err := api.MarginAccount(exchange.InstrumentId)
 	if err != nil {
 		return nil, fmt.Errorf("获取账户信息失败! err:%w", err)
+	}
+	if exchange.Liquidation.IsZero() {
+		exchange.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
 	}
 	detail, err := api.MarginOrderDetail(exchange.InstrumentId, exchange.OrderId)
 	if err != nil {
@@ -303,10 +319,10 @@ func boomBunker(exchange CloseExchange) bool {
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
 		exchange.Liquidation = exchange.Liquidation.Div(risk)
-		return exchange.MarkPrice.GreaterThan(exchange.Liquidation)
+		return exchange.MarkPrice.LessThan(exchange.Liquidation)
 	case config.OPEN_EMPTY:
 		exchange.Liquidation = exchange.Liquidation.Mul(risk)
-		return exchange.MarkPrice.LessThan(exchange.Liquidation)
+		return exchange.MarkPrice.GreaterThan(exchange.Liquidation)
 	}
 	return false
 }
