@@ -29,12 +29,12 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 	}
 
 	equity, _ := decimal.NewFromString(account.Info.Equity)
-	glog.Infoln("合约账户可用权益:", equity.String())
+	glog.Infof("合约账户信息:%+v 可用权益:%s\n", account.Info, equity)
 
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
 		swapExchange.TradeType = config.OPEN_EMPTY
-	case config.OPEN_PAUSE:
+	case config.OPEN_EMPTY:
 		swapExchange.TradeType = config.OPEN_MANY
 	}
 
@@ -65,7 +65,7 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 	sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
 
 	// 重算双方最大对冲btc数
-	maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(int64(exchange.Leverage), -2))
+	maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
 
 	swapExchange.Params = map[string]string{
 		"client_oid":    genRandClientId(),
@@ -87,7 +87,7 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 		Name:         "币币杠杆",
 		InstrumentId: instrumentId,
 	}
-	exchange.TradeType = api.SwapTradeType("BTC-USDT-SWAP")
+	exchange.TradeType = api.SwapTradeType("BTC-USD-SWAP")
 
 	glog.Infof("币币杠杆预测 %s \n", exchange.TradeType)
 
@@ -253,7 +253,7 @@ func genRandClientId() string {
 
 func mustSwapOrder(params map[string]string) string {
 	delta := 0
-	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) {
+	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) || params["type"] == strconv.Itoa(int(config.CLOSE_MANY)) {
 		delta = -1
 	}
 	for i := 0; i < 50; i++ {
@@ -261,9 +261,8 @@ func mustSwapOrder(params map[string]string) string {
 		if err != nil {
 			glog.Errorln("合约下单失败! ", err)
 			size, _ := strconv.Atoi(params["size"])
-			size += delta
-			if size <= 0 {
-				panic("mustSwapOrder size zero")
+			if t := size + delta; t > 0 {
+				size = t
 			}
 			params["size"] = strconv.Itoa(size)
 			time.Sleep(500 * time.Millisecond)
@@ -284,9 +283,8 @@ func mustMarginOrder(params map[string]string) string {
 		if err != nil {
 			glog.Errorln("杠杆下单失败! ", err)
 			size, _ := strconv.ParseFloat(params["size"], 64)
-			size += delta * 0.001
-			if size <= 0 {
-				panic("mustMarginOrder size zero")
+			if t := size + delta*0.001; t > 0 {
+				size = t
 			}
 			params["size"] = strconv.FormatFloat(size, 'g', -1, 64)
 			time.Sleep(500 * time.Millisecond)

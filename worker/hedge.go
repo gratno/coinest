@@ -45,7 +45,7 @@ func hedgeWorker(lastClosedInfo *ClosedExchangeInfo) *ClosedExchangeInfo {
 	total := openInfo.Swap.MarkPrice.Mul(openInfo.Swap.Amount).
 		Add(openInfo.Margin.MarkPrice.Mul(openInfo.Margin.Amount))
 	expect := total.Mul(decimal.NewFromFloat(point / 100))
-	glog.Infof("余额:%s 任务需直到收益超过 %s 时结束！\n", total.Truncate(4), expect.Truncate(4))
+	glog.Infof("归零值 swap:%s margin:%s 余额:%s 任务需直到收益超过 %s 时结束！\n", openInfo.Swap.Liquidation, openInfo.Margin.Liquidation, total.Truncate(4), expect.Truncate(4))
 
 	var (
 		lastIncome decimal.Decimal

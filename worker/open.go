@@ -15,12 +15,15 @@ func openHedge(needBorrow bool) (*OpenedExchangeInfo, error) {
 		return info, fmt.Errorf("preOpenMargin failed! %w", err)
 	}
 	info.Margin = marginExchange
-	swapExchange, err := preOpenSwap("BTC-USDT-SWAP", marginExchange)
+	swapExchange, err := preOpenSwap("BTC-USD-SWAP", marginExchange)
 	if err != nil {
 		return info, fmt.Errorf("preOpenSwap failed! %w", err)
 	}
 	info.Swap = swapExchange
-	marginExchange.Params["size"] = swapExchange.Amount.Truncate(2).String()
+	if info.Swap.Amount.LessThanOrEqual(info.Margin.Amount) {
+		info.Margin.Amount = info.Swap.Amount
+		marginExchange.Params["size"] = info.Swap.Amount.Truncate(2).String()
+	}
 	group := errgroup.Group{}
 	group.Go(func() error {
 		marginExchange.OrderId = mustMarginOrder(marginExchange.Params)

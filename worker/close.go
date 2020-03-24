@@ -74,6 +74,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	}
 
 	closedInfo.Margin.Income = marginIncome
+	glog.Infof("income swap:%s margin:%s \n", swapIncome, marginIncome)
 	d := swapIncome.Add(marginIncome).Sub(SwapMark.Mul(decimal.NewFromFloat(0.001)))
 	closedInfo.Income = d
 	closedInfo.Stop = stop(d)
@@ -295,6 +296,9 @@ func waitFinished(swap map[string]string, margin map[string]string) string {
 }
 
 func boomBunker(exchange CloseExchange) bool {
+	if !exchange.Liquidation.GreaterThan(decimal.Zero) {
+		return false
+	}
 	risk := decimal.NewFromFloat(0.98)
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
