@@ -32,14 +32,12 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	if len(position.Holding) == 0 {
 		return nil, fmt.Errorf("未检测到仓位")
 	}
-	if openInfo.Margin.Liquidation.IsZero() {
-		account, err := api.MarginAccount(openInfo.Margin.InstrumentId)
-		if err != nil {
-			return nil, fmt.Errorf("获取账户信息失败! err:%w", err)
-		}
-		openInfo.Margin.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
-		glog.Infoln("初始化币币杠杆归零值:", openInfo.Margin.Liquidation)
+	account, err := api.MarginAccount(openInfo.Margin.InstrumentId)
+	if err != nil {
+		return nil, fmt.Errorf("获取账户信息失败! err:%w", err)
 	}
+	openInfo.Margin.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
+	glog.Infoln("初始化币币杠杆归零值:", openInfo.Margin.Liquidation)
 
 	holding := position.Holding[0]
 	closedInfo.Swap.Liquidation, _ = decimal.NewFromString(holding.LiquidationPrice)

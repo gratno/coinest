@@ -57,20 +57,20 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 
 	// 最大对冲btc数
 	maxAmount := exchange.Amount
-	equity = equity.Mul(decimal.NewFromFloat(0.9))
+	equity = equity.Mul(decimal.NewFromFloat(0.9)).Div(swapExchange.MarkPrice).Mul(decimal.NewFromInt(int64(swapExchange.Leverage)))
 	if maxAmount.GreaterThan(equity) {
 		maxAmount = equity
 	}
 
 	// 最大可开合约张数
-	sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
+	//sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
 
 	// 重算双方最大对冲btc数
-	maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
+	//maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
 
 	swapExchange.Params = map[string]string{
 		"client_oid":    genRandClientId(),
-		"size":          strconv.FormatInt(sheets, 10),
+		"size":          maxAmount.Truncate(4).String(),
 		"type":          strconv.Itoa(int(swapExchange.TradeType)),
 		"order_type":    "0",
 		"match_price":   "1",
