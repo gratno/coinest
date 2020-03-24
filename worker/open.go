@@ -38,7 +38,6 @@ func openHedge(needBorrow bool) (*OpenedExchangeInfo, error) {
 
 	_ = group.Wait()
 	_ = openPool.Wait()
-
 	return info, nil
 }
 

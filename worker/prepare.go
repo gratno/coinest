@@ -57,20 +57,20 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 
 	// 最大对冲btc数
 	maxAmount := exchange.Amount
-	equity = equity.Mul(decimal.NewFromFloat(0.9)).Div(swapExchange.MarkPrice).Mul(decimal.NewFromInt(int64(swapExchange.Leverage)))
+	equity = equity.Mul(decimal.NewFromFloat(0.9))
 	if maxAmount.GreaterThan(equity) {
 		maxAmount = equity
 	}
 
 	// 最大可开合约张数
-	//sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
+	sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
 
 	// 重算双方最大对冲btc数
-	//maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
+	maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
 
 	swapExchange.Params = map[string]string{
 		"client_oid":    genRandClientId(),
-		"size":          maxAmount.Truncate(4).String(),
+		"size":          fmt.Sprintf("%d", sheets),
 		"type":          strconv.Itoa(int(swapExchange.TradeType)),
 		"order_type":    "0",
 		"match_price":   "1",
@@ -255,7 +255,7 @@ func genRandClientId() string {
 }
 
 func mustSwapOrder(params map[string]string) string {
-	delta := 0
+	delta := float64(0)
 	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) || params["type"] == strconv.Itoa(int(config.CLOSE_MANY)) {
 		delta = -1
 	}
@@ -263,11 +263,11 @@ func mustSwapOrder(params map[string]string) string {
 		orderId, err := api.SwapOrder(params)
 		if err != nil {
 			glog.Errorln("合约下单失败! ", err)
-			size, _ := strconv.Atoi(params["size"])
-			if t := size + delta; t > 0 {
+			size, _ := strconv.ParseFloat(params["size"], 64)
+			if t := size + delta*0.01; t > 0 {
 				size = t
 			}
-			params["size"] = strconv.Itoa(size)
+			params["size"] = strconv.FormatFloat(size, 'g', -1, 64)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
