@@ -88,7 +88,7 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 		Name:         "币币杠杆",
 		InstrumentId: instrumentId,
 	}
-	exchange.TradeType = api.SwapTradeType("BTC-USD-SWAP")
+	exchange.TradeType = api.SwapTradeType("BTC-USDT-SWAP")
 
 	glog.Infof("币币杠杆预测 %s \n", exchange.TradeType)
 

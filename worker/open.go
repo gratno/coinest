@@ -15,7 +15,7 @@ func openHedge(needBorrow bool) (*OpenedExchangeInfo, error) {
 		return info, fmt.Errorf("preOpenMargin failed! %w", err)
 	}
 	info.Margin = marginExchange
-	swapExchange, err := preOpenSwap("BTC-USD-SWAP", marginExchange)
+	swapExchange, err := preOpenSwap("BTC-USDT-SWAP", marginExchange)
 	if err != nil {
 		return info, fmt.Errorf("preOpenSwap failed! %w", err)
 	}
