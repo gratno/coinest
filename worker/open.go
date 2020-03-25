@@ -10,7 +10,7 @@ import (
 
 func openHedge(needBorrow bool) (*OpenedExchangeInfo, error) {
 	info := &OpenedExchangeInfo{}
-	marginExchange, err := preOpenMargin("BTC-USDT", needBorrow, true, nil)
+	marginExchange, err := preOpenMargin("BTC-USDT", false, false, nil)
 	if err != nil {
 		return info, fmt.Errorf("preOpenMargin failed! %w", err)
 	}
