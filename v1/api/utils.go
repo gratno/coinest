@@ -2,7 +2,7 @@ package api
 
 import (
 	"bytes"
-	"coinest/config"
+	"coinest/v1/config"
 	"compress/flate"
 	"crypto/hmac"
 	"crypto/sha256"

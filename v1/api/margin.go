@@ -2,7 +2,7 @@ package api
 
 import (
 	"bytes"
-	"coinest/model"
+	"coinest/v1/model"
 	"encoding/json"
 	"fmt"
 	"github.com/golang/glog"

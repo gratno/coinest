@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"coinest/api"
+	"coinest/v1/api"
 	"errors"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"

@@ -1,7 +1,7 @@
 package api
 
 import (
-	"coinest/config"
+	"coinest/v1/config"
 	"encoding/json"
 	"fmt"
 	"github.com/golang/glog"

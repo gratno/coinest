@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"coinest/config"
+	"coinest/v1/config"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"

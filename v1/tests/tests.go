@@ -1,9 +1,9 @@
 package main
 
 import (
-	"coinest/api"
-	"coinest/config"
-	"coinest/worker"
+	"coinest/v1/api"
+	"coinest/v1/config"
+	"coinest/v1/worker"
 	"fmt"
 	"github.com/golang/glog"
 	"os"

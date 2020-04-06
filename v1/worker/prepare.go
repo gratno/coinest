@@ -1,9 +1,9 @@
 package worker
 
 import (
-	"coinest/api"
-	"coinest/config"
-	"coinest/model"
+	"coinest/v1/api"
+	"coinest/v1/config"
+	"coinest/v1/model"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"
