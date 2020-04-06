@@ -40,7 +40,7 @@ func hedgeWorker(lastClosedInfo *ClosedExchangeInfo) *ClosedExchangeInfo {
 		}
 	}()
 
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	total := openInfo.Swap.MarkPrice.Mul(openInfo.Swap.Amount).
 		Add(openInfo.Margin.MarkPrice.Mul(openInfo.Margin.Amount))

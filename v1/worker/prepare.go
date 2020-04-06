@@ -29,7 +29,7 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 		return nil, fmt.Errorf("合约获取账户信息失败! err:%w", err)
 	}
 
-	equity, _ := decimal.NewFromString(account.Info.Equity)
+	equity, _ := decimal.NewFromString(account.Info.MaxWithdraw)
 	glog.Infof("合约账户信息:%+v 可用权益:%s\n", account.Info, equity)
 
 	switch exchange.TradeType {
@@ -57,13 +57,13 @@ func preOpenSwap(instrumentId string, exchange *OpenExchange) (*OpenExchange, er
 
 	// 最大对冲btc数
 	maxAmount := exchange.Amount
-	equity = equity.Mul(decimal.NewFromFloat(0.9))
+	equity = equity.Div(swapExchange.MarkPrice).Mul(decimal.NewFromInt(int64(exchange.Leverage)))
 	if maxAmount.GreaterThan(equity) {
 		maxAmount = equity
 	}
 
 	// 最大可开合约张数
-	sheets := maxAmount.Mul(decimal.New(int64(exchange.Leverage), -2)).Mul(swapExchange.MarkPrice).IntPart()
+	sheets := maxAmount.Mul(decimal.NewFromInt(100)).IntPart()
 
 	// 重算双方最大对冲btc数
 	maxAmount = decimal.NewFromInt(sheets).Div(swapExchange.MarkPrice).Div(decimal.New(1, -2))
@@ -154,17 +154,6 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 
 	exchange.Liquidation, _ = decimal.NewFromString(account.LiquidationPrice)
 
-	switch exchange.TradeType {
-	case config.OPEN_MANY:
-		if d, _ := decimal.NewFromString(account.CurrencyUSDT.Available); d.LessThan(decimal.NewFromInt(1)) {
-			exchange.TradeType = config.OPEN_EMPTY
-		}
-	case config.OPEN_EMPTY:
-		if d, _ := decimal.NewFromString(account.CurrencyBTC.Available); d.LessThan(decimal.NewFromFloat(0.005)) {
-			exchange.TradeType = config.OPEN_MANY
-		}
-	}
-
 	var side string
 
 	price, err := api.MarginMarkPrice(instrumentId)
@@ -173,6 +162,14 @@ func preOpenMargin(instrumentId string, needBorrow bool, reverse bool, hook func
 	}
 	markPrice, _ := decimal.NewFromString(price.MarkPrice)
 	exchange.MarkPrice = markPrice
+
+	btcava, _ := decimal.NewFromString(account.CurrencyBTC.Available)
+	usdtava, _ := decimal.NewFromString(account.CurrencyUSDT.Available)
+	if btcava.Mul(exchange.MarkPrice).GreaterThan(usdtava) {
+		exchange.TradeType = config.OPEN_EMPTY
+	} else {
+		exchange.TradeType = config.OPEN_MANY
+	}
 
 	var amount decimal.Decimal
 	switch exchange.TradeType {
@@ -255,19 +252,19 @@ func genRandClientId() string {
 }
 
 func mustSwapOrder(params map[string]string) string {
-	delta := float64(0)
-	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) || params["type"] == strconv.Itoa(int(config.CLOSE_MANY)) {
+	delta := 0
+	if params["type"] == strconv.Itoa(int(config.OPEN_MANY)) || params["type"] == strconv.Itoa(int(config.OPEN_EMPTY)) {
 		delta = -1
 	}
 	for i := 0; i < 50; i++ {
 		orderId, err := api.SwapOrder(params)
 		if err != nil {
 			glog.Errorln("合约下单失败! ", err)
-			size, _ := strconv.ParseFloat(params["size"], 64)
-			if t := size + delta*0.01; t > 0 {
+			size, _ := strconv.Atoi(params["size"])
+			if t := size + delta; t > 0 {
 				size = t
 			}
-			params["size"] = strconv.FormatFloat(size, 'g', -1, 64)
+			params["size"] = strconv.Itoa(size)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}

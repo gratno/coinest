@@ -51,7 +51,8 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	}
 	swapIncome, _ := decimal.NewFromString(holding.UnrealizedPnl)
 	SwapMark, _ := decimal.NewFromString(price.MarkPrice)
-	swapIncome = swapIncome.Sub(decimal.NewFromFloat(0.002)).Mul(SwapMark)
+	//swapIncome = swapIncome.Sub(decimal.NewFromFloat(0.002)).Mul(SwapMark)
+	swapIncome = openInfo.Swap.MarkPrice.Sub(SwapMark)
 	closedInfo.Swap.MarkPrice = SwapMark
 	closedInfo.Swap.Income = swapIncome
 	detail, err := api.MarginOrderDetail(openInfo.Margin.InstrumentId, openInfo.Margin.OrderId)
@@ -70,7 +71,8 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 	closedInfo.Margin.MarkPrice = markPrice
 
 	glog.Infof("币币杠杆标记价格 old:%s new:%s action:%s\n", openInfo.Margin.MarkPrice, mark.MarkPrice, openInfo.Margin.TradeType)
-	marginIncome = marginIncome.Sub(markPrice.Mul(openInfo.Margin.Amount))
+	//marginIncome = marginIncome.Sub(markPrice.Mul(openInfo.Margin.Amount))
+	marginIncome = openInfo.Margin.MarkPrice.Sub(markPrice)
 
 	var (
 		side string
@@ -82,11 +84,13 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		marginIncome = marginIncome.Neg()
 	case config.OPEN_EMPTY:
 		side = "buy"
+		closedInfo.Swap.Income = closedInfo.Swap.Income.Neg()
 	}
 
 	closedInfo.Margin.Income = marginIncome
-	glog.Infof("income swap:%s margin:%s \n", swapIncome, marginIncome)
-	d := swapIncome.Add(marginIncome).Sub(SwapMark.Mul(decimal.NewFromFloat(0.001)))
+	glog.Infof("income swap:%s margin:%s \n", closedInfo.Swap.Income, closedInfo.Margin.Income)
+	//d := swapIncome.Add(marginIncome).Sub(SwapMark.Mul(decimal.NewFromFloat(0.001)))
+	d := swapIncome.Add(marginIncome)
 	closedInfo.Income = d
 	closedInfo.Stop = stop(d)
 
@@ -97,7 +101,7 @@ func closeHedge(openInfo *OpenedExchangeInfo, stop func(income decimal.Decimal) 
 		}
 		return false
 	}
-	if boom(*closedInfo.Swap) || boom(*closedInfo.Margin) {
+	if boom(*closedInfo.Swap) {
 		goto exit
 	}
 	if !closedInfo.Stop {
@@ -316,11 +320,11 @@ func boomBunker(exchange CloseExchange) bool {
 	risk := decimal.NewFromFloat(0.98)
 	switch exchange.TradeType {
 	case config.OPEN_MANY:
-		exchange.Liquidation = exchange.Liquidation.Div(risk)
-		return exchange.MarkPrice.LessThan(exchange.Liquidation)
+		liquidation := exchange.Liquidation.Div(risk)
+		return exchange.MarkPrice.LessThan(liquidation)
 	case config.OPEN_EMPTY:
-		exchange.Liquidation = exchange.Liquidation.Mul(risk)
-		return exchange.MarkPrice.GreaterThan(exchange.Liquidation)
+		liquidation := exchange.Liquidation.Mul(risk)
+		return exchange.MarkPrice.GreaterThan(liquidation)
 	}
 	return false
 }
