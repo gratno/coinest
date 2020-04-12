@@ -22,12 +22,11 @@ import (
 
 var (
 	currencyExchange = make(map[string]decimal.Decimal)
-)
-
-const (
-	DOWN    = "down"
-	UP      = "up"
-	UNKNOWN = "unknown"
+	// 止损点
+	disloss int64 = 500
+	// 止盈点
+	disgain    int64 = 100
+	relateDiff int64 = 30
 )
 
 func init() {
@@ -80,10 +79,10 @@ func (k K) Len() int {
 	return len(k)
 }
 
-func (k K) Time(i int) string {
+func (k K) Time(i int) Trend {
 	n := k.Len()
 	if n < i {
-		return UNKNOWN
+		return TREND_UNKNOWN
 	}
 	dst := make([]decimal.Decimal, i)
 	copy(dst, k[n-i:n])
@@ -98,28 +97,28 @@ func (k K) Time(i int) string {
 	}
 
 	if !*direct {
-		return DOWN
+		return TREND_EMPTY
 	} else {
-		return UP
+		return TREND_MANY
 	}
 
 _UNKNOWN:
 	first, end := dst[0], dst[len(dst)-1]
 	max, min, avg := decimal.Max(dst[0], dst[1:]...), decimal.Min(dst[0], dst[1:]...), decimal.Avg(dst[0], dst[1:]...)
 	if avg.LessThan(first) && min.Equal(end) {
-		return DOWN
+		return TREND_EMPTY
 	}
 	if avg.GreaterThan(first) && max.Equal(end) {
-		return UP
+		return TREND_MANY
 	}
 
-	return UNKNOWN
+	return TREND_UNKNOWN
 
 }
 
-func (k K) Shadow(dst, delta decimal.Decimal) string {
+func (k K) Shadow(dst, delta decimal.Decimal) Trend {
 	if dst.IsZero() {
-		return UNKNOWN
+		return TREND_UNKNOWN
 	}
 	avg := Avg(k)
 	gtc := 0
@@ -138,13 +137,13 @@ func (k K) Shadow(dst, delta decimal.Decimal) string {
 	if d.GreaterThan(delta) {
 		if neg {
 			if ltc >= k.Len()/2 {
-				return DOWN
+				return TREND_EMPTY
 			}
 		} else if gtc >= k.Len()/2 {
-			return UP
+			return TREND_MANY
 		}
 	}
-	return UNKNOWN
+	return TREND_UNKNOWN
 }
 
 type Args struct {
@@ -172,6 +171,7 @@ type Task struct {
 func (t *Task) Worker() {
 	dumpt := time.NewTicker(10 * time.Second)
 	decidet := time.NewTicker(time.Minute)
+	player := NewPlayer("BTC-USD-SWAP")
 	go func() {
 		for {
 			select {
@@ -180,21 +180,22 @@ func (t *Task) Worker() {
 				t.history = append(t.history, t.current[goex.OKEX_V3])
 			case <-decidet.C:
 				recent := atomic.LoadInt64(&t.tradedCount)
-				trend := UNKNOWN
+				trend := Trend(TREND_UNKNOWN)
 				quotes := make(K, 0)
 				for _, v := range t.current {
 					quotes = append(quotes, v)
 				}
 				source := ""
-				if r := quotes.Shadow(t.real, decimal.New(30, 0)); r != UNKNOWN {
+				if r := quotes.Shadow(t.real, decimal.New(relateDiff, 0)); r != TREND_UNKNOWN {
 					trend = r
 					source = "shadow"
-				} else if r18 := t.history.Time(18); r18 != UNKNOWN && r18 == t.history.Time(6) {
+				} else if r18 := t.history.Time(18); r18 != TREND_UNKNOWN && r18 == t.history.Time(6) {
 					trend = r18
 					source = "ktime"
 				}
-				glog.Infof("last:%d recent:%d real:%s source:%s 预判趋势: 【%s】 \n", t.lastTradedCount, recent, t.real, source, trend)
+				glog.Infof("last:%d recent:%d real:%s source:%s 预判趋势: 【%s】 \n", t.lastTradedCount, recent, t.real, source, trend.String())
 				t.lastTradedCount = recent
+				player.Worker(trend)
 			}
 		}
 	}()
