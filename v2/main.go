@@ -1,11 +1,11 @@
 package main
 
 import (
+	"coinest/v2/config"
 	"coinest/v2/goex"
 	"coinest/v2/goex/builder"
 	"coinest/v2/goex/okex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"
@@ -178,6 +178,9 @@ func (t *Task) Worker() {
 			case <-dumpt.C:
 				t.Dump()
 				t.history = append(t.history, t.current[goex.OKEX_V3])
+				if t.history.Len() > 10000 {
+					t.history = t.history[5000:]
+				}
 			case <-decidet.C:
 				recent := atomic.LoadInt64(&t.tradedCount)
 				trend := Trend(TREND_UNKNOWN)
@@ -192,6 +195,11 @@ func (t *Task) Worker() {
 				} else if r18 := t.history.Time(18); r18 != TREND_UNKNOWN && r18 == t.history.Time(6) {
 					trend = r18
 					source = "ktime"
+					now := t.history[len(t.history)-1]
+					before := t.history[len(t.history)-4]
+					if now.Sub(before).Abs().GreaterThan(decimal.NewFromInt(40)) {
+						trend = TREND_UNKNOWN
+					}
 				}
 				glog.Infof("last:%d recent:%d real:%s source:%s 预判趋势: 【%s】 \n", t.lastTradedCount, recent, t.real, source, trend.String())
 				t.lastTradedCount = recent
@@ -271,9 +279,9 @@ func (t *Task) WSRegister(channel string, data json.RawMessage) error {
 }
 
 func main() {
-	flag.Parse()
 	defer glog.Flush()
 	os.Setenv("GOEX_LOG_LEVEL", "ERROR")
+	config.Parse()
 	//proxyUrl := "socks5://127.0.0.1:1080"
 	proxyUrl := ""
 	apiBuilder := builder.NewAPIBuilder().HttpTimeout(5 * time.Second).HttpProxy(proxyUrl)

@@ -139,7 +139,7 @@ func (p *Player) Worker(trend Trend) {
 }
 
 func (p *Player) giveUp(cur decimal.Decimal) bool {
-	if cur.IsNegative() {
+	if cur.LessThan(decimal.NewFromInt(10)) {
 		return false
 	}
 	if p.stats["history"] == nil {
@@ -184,7 +184,7 @@ func NewClient() *Client {
 	client := okex.NewClient(cfg)
 	return &Client{
 		client:   client,
-		Leverage: 20,
+		Leverage: int64(config.Leverage),
 	}
 }
 
@@ -194,6 +194,11 @@ type Client struct {
 }
 
 func (c *Client) Sheets(instrumentId string, price decimal.Decimal) (int64, error) {
+	setting, err := c.client.PostSwapAccountsLeverage(instrumentId, fmt.Sprintf("%d", c.Leverage), "3")
+	if err != nil {
+		return 0, err
+	}
+	glog.Infoln("setting:", setting)
 	account, err := c.client.GetSwapAccount(instrumentId)
 	if err != nil {
 		return 0, err
