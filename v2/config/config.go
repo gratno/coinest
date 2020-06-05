@@ -18,6 +18,8 @@ var (
 func init() {
 	flag.IntVar(&Leverage, "leverage", 10, "set leverage")
 	flag.StringVar(&SecretKey, "secret_key", "", "set secret_key")
+	// 2A1E079D43783F61B345A13CBE202556
+	// ad205c63-0859-41d4-b143-03855086a8be
 	flag.StringVar(&ApiKey, "api_key", "", "set api_key")
 	flag.StringVar(&Passphrase, "passphrase", "", "set passphrase")
 	flag.StringVar(&configPath, "config", "/etc/coinest.json", "set config location")

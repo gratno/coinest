@@ -138,6 +138,24 @@ func (client *Client) PostSwapOrder(instrumentId string, order *BasePlaceOrderIn
 	return &or, nil
 }
 
+func (client *Client) PostSwapAlgoOrder(instrumentId string, order *BaseAlgoOrderInfo) (map[string]interface{}, error) {
+	or := map[string]interface{}{}
+	info := AlgoOrderInfo{*order, instrumentId}
+	if _, err := client.Request(POST, SWAP_ORDER_Algo, info, &or); err != nil {
+		return nil, err
+	}
+	return or, nil
+}
+
+func (client *Client) PostSwapCancelAlgoOrder(instrumentId string, order *BaseCancelAlgoOrderInfo) (map[string]interface{}, error) {
+	or := map[string]interface{}{}
+	info := CancelAlgoOrderInfo{*order, instrumentId}
+	if _, err := client.Request(POST, SWAP_ORDER_Algo, info, &or); err != nil {
+		return nil, err
+	}
+	return or, nil
+}
+
 /*
 批量进行下单请求。
 

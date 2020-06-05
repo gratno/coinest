@@ -5,44 +5,31 @@ import (
 	"coinest/v2/goex"
 	"coinest/v2/goex/builder"
 	"coinest/v2/goex/okex"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/buger/jsonparser"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 var (
 	currencyExchange = make(map[string]decimal.Decimal)
 	// 止损点
-	disloss int64 = 500
+	disloss float64 = 5.0
 	// 止盈点
-	disgain    int64 = 100
-	relateDiff int64 = 30
+	disgain float64 = 0.5
 )
 
 func init() {
 	rand.Seed(20200328 << 3)
-}
-
-func Avg(src []decimal.Decimal) decimal.Decimal {
-	dst := make([]decimal.Decimal, len(src))
-	copy(dst, src)
-	sort.SliceStable(dst, func(i, j int) bool {
-		return dst[i].LessThan(dst[j])
-	})
-	dst = dst[1 : len(dst)-1]
-	avg := decimal.Avg(dst[0], dst[1:]...)
-	avg = avg.Truncate(2)
-	return avg
 }
 
 func Init(client *http.Client) {
@@ -73,79 +60,6 @@ func getCurrencyExchange(client *http.Client, currency string) (dst decimal.Deci
 	return
 }
 
-type K []decimal.Decimal
-
-func (k K) Len() int {
-	return len(k)
-}
-
-func (k K) Time(i int) Trend {
-	n := k.Len()
-	if n < i {
-		return TREND_UNKNOWN
-	}
-	dst := make([]decimal.Decimal, i)
-	copy(dst, k[n-i:n])
-	var direct *bool
-	for i := 1; i < len(dst); i++ {
-		b := dst[i].GreaterThan(dst[i-1])
-		if direct == nil {
-			direct = &b
-		} else if b != *direct {
-			goto _UNKNOWN
-		}
-	}
-
-	if !*direct {
-		return TREND_EMPTY
-	} else {
-		return TREND_MANY
-	}
-
-_UNKNOWN:
-	first, end := dst[0], dst[len(dst)-1]
-	max, min, avg := decimal.Max(dst[0], dst[1:]...), decimal.Min(dst[0], dst[1:]...), decimal.Avg(dst[0], dst[1:]...)
-	if avg.LessThan(first) && min.Equal(end) {
-		return TREND_EMPTY
-	}
-	if avg.GreaterThan(first) && max.Equal(end) {
-		return TREND_MANY
-	}
-
-	return TREND_UNKNOWN
-
-}
-
-func (k K) Shadow(dst, delta decimal.Decimal) Trend {
-	if dst.IsZero() {
-		return TREND_UNKNOWN
-	}
-	avg := Avg(k)
-	gtc := 0
-	for _, v := range k {
-		if v.GreaterThan(avg) {
-			gtc++
-		}
-	}
-	ltc := k.Len() - gtc
-	d := dst.Sub(avg)
-	neg := false
-	if d.IsNegative() {
-		d = d.Neg()
-		neg = true
-	}
-	if d.GreaterThan(delta) {
-		if neg {
-			if ltc >= k.Len()/2 {
-				return TREND_EMPTY
-			}
-		} else if gtc >= k.Len()/2 {
-			return TREND_MANY
-		}
-	}
-	return TREND_UNKNOWN
-}
-
 type Args struct {
 	Exchange    string
 	Currency    *goex.CurrencyPair
@@ -158,93 +72,203 @@ type Exchange struct {
 }
 
 type Task struct {
-	history         K
-	current         map[string]decimal.Decimal
-	exchanges       []Exchange
-	size            int
-	ws              *okex.OKExV3Ws
-	real            decimal.Decimal
-	lastTradedCount int64
-	tradedCount     int64
+	// 负亏损
+	Disloss decimal.Decimal
+	// 正收益
+	Disgain         decimal.Decimal
+	last            decimal.Decimal
+	current         decimal.Decimal
+	trend           *Trend
+	profile         decimal.Decimal
+	serverTime      time.Time
+	trf             bool
+	WS              *okex.OKExV3Ws
+	client          *Client
+	markPrice       decimal.Decimal
+	markPriceMtx    sync.RWMutex
+	depthStream     chan []byte
+	markPriceStream chan []byte
+	futureModel
+}
+
+func (t *Task) Init() {
+	t.client = NewClient()
+	for i := 0; i < 3; i++ {
+		if now, err := t.client.ServerTime(); err == nil {
+			t.serverTime = now
+			break
+		} else {
+			glog.Errorln(err)
+		}
+	}
+	if t.serverTime.IsZero() {
+		panic("init server time failed!")
+	}
+	t.depthStream = make(chan []byte)
+	t.markPriceStream = make(chan []byte)
+}
+
+func (t *Task) Now() time.Time {
+	t.serverTime = t.serverTime.Add(time.Since(t.serverTime))
+	return t.serverTime
+}
+
+func (t *Task) MarkPrice() decimal.Decimal {
+	t.markPriceMtx.RLock()
+	defer t.markPriceMtx.RUnlock()
+	return t.markPrice
+}
+
+func (t *Task) SetMarkPrice(price decimal.Decimal) {
+	t.markPriceMtx.Lock()
+	t.markPrice = price
+	t.markPriceMtx.Unlock()
+}
+
+func (t *Task) IsValidServerTime(timestamp string) bool {
+	if svr, err := time.Parse(time.RFC3339, timestamp); err == nil {
+		diff := time.Now().Sub(svr)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < time.Second {
+			return true
+		}
+		glog.Infoln("now far from svc...", diff)
+	}
+	return false
 }
 
 func (t *Task) Worker() {
-	dumpt := time.NewTicker(10 * time.Second)
-	decidet := time.NewTicker(time.Minute)
-	player := NewPlayer("BTC-USD-SWAP")
+	parseMarkPrice := func(data []byte) (price decimal.Decimal) {
+		val, err := jsonparser.GetString(data, "mark_price")
+		if err != nil {
+			glog.Errorln("jsonparser.GetString:mark_price", err)
+			return
+		}
+		timestamp, _ := jsonparser.GetString(data, "timestamp")
+		if !t.IsValidServerTime(timestamp) {
+			return
+		}
+		price, _ = decimal.NewFromString(val)
+		return
+	}
+	parseDepth := func(data []byte, depths []depth) []depth {
+		jsonparser.ArrayEach(data, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+			switch dataType {
+			case jsonparser.Array:
+				var depth depth
+				arr := make([]string, 0)
+				jsonparser.ArrayEach(value, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+					switch dataType {
+					case jsonparser.String:
+						arr = append(arr, string(value))
+					}
+				})
+				depth.CopyFrom(arr)
+				depths = append(depths, depth)
+			}
+		})
+		return depths
+	}
+	stop := make(chan struct{})
+	dumpTicker := time.NewTicker(10 * time.Second)
+	defer dumpTicker.Stop()
+	player := NewPlayer("BTC-USD-SWAP", t.client)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
 			select {
-			case <-dumpt.C:
+			case <-dumpTicker.C:
 				t.Dump()
-				t.history = append(t.history, t.current[goex.OKEX_V3])
-				if t.history.Len() > 10000 {
-					t.history = t.history[5000:]
+				player.Dump()
+			case data := <-t.depthStream:
+				timestamp, _ := jsonparser.GetString(data, "timestamp")
+				if !t.IsValidServerTime(timestamp) {
+					continue
 				}
-			case <-decidet.C:
-				recent := atomic.LoadInt64(&t.tradedCount)
-				trend := Trend(TREND_UNKNOWN)
-				quotes := make(K, 0)
-				for _, v := range t.current {
-					quotes = append(quotes, v)
+				var (
+					asks, bids []depth
+				)
+				asksb, _, _, _ := jsonparser.Get(data, "asks")
+				bidsb, _, _, _ := jsonparser.Get(data, "bids")
+				asks = parseDepth(asksb, asks)
+				bids = parseDepth(bidsb, bids)
+				t.current = t.MarkPrice()
+				if t.current.IsZero() {
+					continue
 				}
-				source := ""
-				if r := quotes.Shadow(t.real, decimal.New(relateDiff, 0)); r != TREND_UNKNOWN {
-					trend = r
-					source = "shadow"
-				} else if r18 := t.history.Time(18); r18 != TREND_UNKNOWN && r18 == t.history.Time(6) {
-					trend = r18
-					source = "ktime"
-					now := t.history[len(t.history)-1]
-					before := t.history[len(t.history)-4]
-					if now.Sub(before).Abs().GreaterThan(decimal.NewFromInt(40)) {
-						trend = TREND_UNKNOWN
+				future := t.Future(t.current, asks, bids)
+				if t.trend != nil {
+					if ok, fee := t.Settlement(); ok {
+						err := player.Close(t.MarkPrice(), fee.IsNegative())
+						if err != nil {
+							glog.Errorln("player.Close failed!", err)
+							continue
+						}
+						if player.Status() != 0 {
+							continue
+						}
+						cancel()
+						glog.Infof("结算: trend:%s last:%s current:%s fee:%s asks:%v bids:%v\n", t.trend, t.last, t.current, fee, asks, bids)
+						t.profile = t.profile.Add(fee)
+						t.trend = nil
+						// fixme
+						ctx, cancel = context.WithCancel(context.Background())
 					}
+					continue
 				}
-				glog.Infof("last:%d recent:%d real:%s source:%s 预判趋势: 【%s】 \n", t.lastTradedCount, recent, t.real, source, trend.String())
-				t.lastTradedCount = recent
-				player.Worker(trend)
+				if future == TREND_UNKNOWN {
+					continue
+				}
+				err := player.Open(future, t.MarkPrice())
+				if err != nil {
+					glog.Errorln("player.Open failed!", err)
+					continue
+				}
+				t.trend = &future
+				t.last = t.current
+				go func() {
+					if err := player.Algo(ctx, future, t.current); err != nil {
+						glog.Errorln("player.Algo", err)
+					}
+				}()
+				glog.Infof("开始: trend:%s last:%s current:%s asks:%v bids:%v\n", t.trend, t.last, t.current, asks, bids)
+			case data := <-t.markPriceStream:
+				if d := parseMarkPrice(data); !d.IsZero() {
+					t.SetMarkPrice(d)
+				}
 			}
 		}
 	}()
-
+	<-stop
 }
 
 func (t *Task) Dump() {
-	ch := make(chan struct {
-		Name string
-		Avg  decimal.Decimal
-	}, len(t.exchanges))
-	wg := sync.WaitGroup{}
-	for _, exchange := range t.exchanges {
-		wg.Add(1)
-		go func(exchange Exchange) {
-			defer wg.Done()
-			depths, err := t.AsksDepth(exchange.Api, exchange.Args)
-			if err != nil {
-				glog.Errorln(exchange.Api.GetExchangeName(), err)
-				return
-			}
-			ch <- struct {
-				Name string
-				Avg  decimal.Decimal
-			}{Name: exchange.Args.Exchange, Avg: Avg(depths)}
-		}(exchange)
+	glog.Infof("Dump: trend:%v last:%s current:%s profile:%s\n", t.trend, t.last, t.current, t.profile)
+}
 
+func (t *Task) Settlement() (ok bool, fee decimal.Decimal) {
+	if t.trend != nil {
+		diff := t.current.Sub(t.last)
+		switch *t.trend {
+		case TREND_MANY:
+		case TREND_EMPTY:
+			diff = diff.Neg()
+		}
+		if diff.GreaterThanOrEqual(t.Disgain) || diff.LessThanOrEqual(t.Disloss) {
+			return true, diff
+		}
 	}
-	wg.Wait()
-	close(ch)
-	t.current = make(map[string]decimal.Decimal)
-	for v := range ch {
-		t.current[v.Name] = v.Avg
-	}
+
+	return false, decimal.Decimal{}
 }
 
 func (t *Task) AsksDepth(api goex.API, args Args) ([]decimal.Decimal, error) {
 	if args.Currency == nil {
 		args.Currency = &goex.BTC_USD
 	}
-	depth, err := api.GetDepth(t.size, *args.Currency)
+	depth, err := api.GetDepth(10, *args.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -260,22 +284,29 @@ func (t *Task) AsksDepth(api goex.API, args Args) ([]decimal.Decimal, error) {
 	return list, nil
 }
 
-func (t *Task) WSRegister(channel string, data json.RawMessage) error {
-	atomic.AddInt64(&t.tradedCount, 1)
-	b, err := data.MarshalJSON()
-	if err != nil {
-		glog.Errorln("[WS]", err)
+func (t *Task) WSRegister(chs map[string]chan<- []byte) func(channel string, data json.RawMessage) error {
+	return func(channel string, data json.RawMessage) error {
+		b, err := data.MarshalJSON()
+		if err != nil {
+			glog.Errorln("[WS]", err)
+			return nil
+		}
+		result := make([]map[string]interface{}, 0)
+		if err = json.Unmarshal(b, &result); err == nil {
+			res := result[0]
+			b, _ := json.Marshal(res)
+			switch channel {
+			case "mark_price":
+				chs["mark_price"] <- b
+			case "depth5":
+				chs["depth5"] <- b
+			}
+		} else {
+			glog.Errorln("json.Unmarshal failed!", err, string(b))
+		}
 		return nil
 	}
-	result := make([]map[string]string, 0)
-	_ = json.Unmarshal(b, &result)
-	if len(result) > 0 {
-		if d, err := decimal.NewFromString(result[0]["price"]); err == nil {
-			d = d.Truncate(2)
-			t.real = d
-		}
-	}
-	return nil
+
 }
 
 func main() {
@@ -286,14 +317,14 @@ func main() {
 	proxyUrl := ""
 	apiBuilder := builder.NewAPIBuilder().HttpTimeout(5 * time.Second).HttpProxy(proxyUrl)
 
-	Init(apiBuilder.GetHttpClient())
+	//Init(apiBuilder.GetHttpClient())
 	exchanges := make([]Exchange, 0)
 
 	for _, v := range []Args{
 		{Exchange: goex.BIGONE, Currency: &goex.BTC_USDT},
 		{Exchange: goex.BINANCE, Currency: &goex.BTC_USDT},
 		{Exchange: goex.BITFINEX},
-		{Exchange: goex.BITHUMB, Currency: &goex.BTC_KRW, ConvertFlag: true},
+		//{Exchange: goex.BITHUMB, Currency: &goex.BTC_KRW, ConvertFlag: true},
 		{Exchange: goex.BITSTAMP},
 		{Exchange: goex.BITTREX},
 		{Exchange: goex.COINEX, Currency: &goex.BTC_USDT},
@@ -312,24 +343,29 @@ func main() {
 		})
 	}
 
-	t := Task{
-		exchanges: exchanges,
-		size:      10,
-	}
+	loss := decimal.NewFromFloat(disloss).Neg()
+	gain := decimal.NewFromFloat(disgain)
+	t := Task{Disloss: loss, Disgain: gain}
+	t.Init()
 
-	ws := okex.NewOKExV3Ws(apiBuilder.Build(goex.OKEX_V3).(*okex.OKEx), t.WSRegister)
+	ws := okex.NewOKExV3Ws(apiBuilder.Build(goex.OKEX_V3).(*okex.OKEx), t.WSRegister(map[string]chan<- []byte{
+		"depth5":     t.depthStream,
+		"mark_price": t.markPriceStream,
+	}))
 	ws.ProxyUrl(proxyUrl)
-	err := ws.Subscribe(map[string]interface{}{
+	if err := ws.Subscribe(map[string]interface{}{
 		"op":   "subscribe",
-		"args": []string{"spot/trade:BTC-USDT"},
-	})
-	if err != nil {
+		"args": []string{"swap/depth5:BTC-USD-SWAP"},
+	}); err != nil {
 		panic(err)
 	}
-	t.ws = ws
+	if err := ws.Subscribe(map[string]interface{}{
+		"op":   "subscribe",
+		"args": []string{"swap/mark_price:BTC-USD-SWAP"},
+	}); err != nil {
+		panic(err)
+	}
+	t.WS = ws
 
 	t.Worker()
-
-	select {}
-
 }

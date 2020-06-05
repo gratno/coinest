@@ -3,172 +3,184 @@ package main
 import (
 	"coinest/okex-go-sdk-api"
 	"coinest/v2/config"
+	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/buger/jsonparser"
 	"github.com/golang/glog"
 	"github.com/shopspring/decimal"
 	"math/rand"
 	"strconv"
-	"strings"
 	"time"
 )
 
 type Player struct {
-	debug        bool
-	status       int // 0 等待开仓 1等待平仓
-	client       *Client
 	instrumentId string
+	status       int // 0 等待开仓 1等待平仓
 	stats        map[string]interface{}
+	Fee          decimal.Decimal
+	client       *Client
 }
 
-func NewPlayer(instrumentId string) *Player {
+func NewPlayer(instrumentId string, client *Client) *Player {
 	p := &Player{
-		debug:        false,
-		client:       NewClient(),
+		client:       client,
 		instrumentId: instrumentId,
 		stats:        make(map[string]interface{}),
 	}
 	return p
 }
 
-func (p *Player) Worker(trend Trend) {
-	if p.debug {
-		return
-	}
-	price, err := p.client.MarkPrice(p.instrumentId)
+func (p *Player) SetStatus(i int) {
+	p.status = i
+}
+
+func (p *Player) Status() int {
+	return p.status
+}
+
+func (p *Player) Algo(ctx context.Context, trend Trend, price decimal.Decimal) error {
+	size, err := p.client.Position(p.instrumentId)
 	if err != nil {
-		glog.Errorf("client.MarkPrice failed! err:%v\n", err)
-		return
+		return err
 	}
-	glog.Infoln("合约当前标记价格:", price.StringFixed(2))
-	if p.status == 0 {
-		if trend == TREND_UNKNOWN {
-			return
-		}
-		sheets, err := p.client.Sheets(p.instrumentId, price)
-		if err != nil {
-			glog.Errorln("client.Sheets failed!", err)
-			return
-		}
-		orderid, err := p.client.Post(p.instrumentId, p.status, trend, price, sheets)
-		if err != nil {
-			glog.Errorf("开仓 client.Post failed! sheets:%d err:%v\n", sheets, err)
-			return
-		}
-		glog.Infof("开仓成功! price:%s sheets:%d trend:%s orderid:%s\n", price.StringFixed(2), sheets, trend.String(), orderid)
-		p.stats["sheets"] = sheets
-		p.stats["orderid"] = orderid
-		p.stats["price"] = price
-		p.stats["trend"] = trend
-		p.status = 1
-		return
+	var triggerPrice decimal.Decimal
+	switch trend {
+	case TREND_EMPTY:
+		triggerPrice = price.Add(decimal.NewFromFloat(2 * disloss))
+	case TREND_MANY:
+		triggerPrice = price.Sub(decimal.NewFromFloat(2 * disloss))
 	}
-	if p.status == 1 {
-		oldtrend := p.stats["trend"].(Trend)
-		oldprice := p.stats["price"].(decimal.Decimal)
-		if oldtrend == trend {
-			return
-		}
-		inc := price.Sub(oldprice)
-		profile := decimal.NewFromInt(0).Add(inc)
-		closed := false
-		if oldtrend == TREND_MANY {
-			switch trend {
-			case TREND_EMPTY:
-				if inc.IsPositive() && inc.GreaterThan(decimal.NewFromInt(10)) {
-					closed = true
-				}
-			case TREND_UNKNOWN:
-				// 止损 止盈
-				if inc.IsNegative() {
-					if inc.Neg().GreaterThan(decimal.NewFromInt(disloss)) {
-						closed = true
-					}
-					break
-				}
-				if inc.GreaterThan(decimal.NewFromInt(disgain)) {
-					closed = true
-				}
-			}
-		} else if oldtrend == TREND_EMPTY {
-			profile = profile.Neg()
-			switch TREND_MANY {
-			case TREND_MANY:
-				if inc.IsNegative() && inc.LessThan(decimal.NewFromInt(-10)) {
-					closed = true
-				}
-			case TREND_UNKNOWN:
-				// 止损 止盈
-				if inc.IsPositive() {
-					if inc.GreaterThan(decimal.NewFromInt(disloss)) {
-						closed = true
-					}
-					break
-				}
-				if inc.Neg().GreaterThan(decimal.NewFromInt(disgain)) {
-					closed = true
-				}
-			}
-		}
-
-		if p.giveUp(profile) {
-			closed = true
-		}
-
-		if v, ok := p.stats["history"]; !ok {
-			p.stats["history"] = []decimal.Decimal{profile}
-		} else {
-			history := v.([]decimal.Decimal)
-			history = append(history, profile)
-			p.stats["history"] = history
-		}
-
-		glog.Infof("new_price:%s profile:%s stats: %s\n", price.StringFixed(2), profile.String(), p.Stats())
-		if closed {
-			glog.Infoln("触发平仓！ profile:", profile.String())
-			sheets := p.stats["sheets"].(int64)
-			_, err := p.client.Post(p.instrumentId, p.status, oldtrend, price, sheets)
-			if err != nil {
-				glog.Errorf("平仓 client.Post failed! sheets:%d err:%v\n", sheets, err)
-				return
-			}
-			p.stats = make(map[string]interface{})
-			p.status = 0
-		}
-
+	algoId, err := p.client.AlgoOrder(p.instrumentId, &okex.BaseAlgoOrderInfo{
+		Type:         fmt.Sprintf("%d", int(trend+3)),
+		Size:         fmt.Sprintf("%d", size),
+		OrderType:    "1",
+		TriggerPrice: triggerPrice.String(),
+		AlgoType:     "2",
+	})
+	if err != nil {
+		return err
 	}
+	select {
+	case <-ctx.Done():
+		mustExecFunc(func() error {
+			return p.client.CancelAlgoOrder(p.instrumentId, &okex.BaseCancelAlgoOrderInfo{
+				AlgoIds:   []string{algoId},
+				OrderType: "1",
+			})
+		}, time.Second)
+	}
+	glog.Infoln("止损撤单成功!")
+	return nil
 }
 
-func (p *Player) giveUp(cur decimal.Decimal) bool {
-	if cur.LessThan(decimal.NewFromInt(10)) {
-		return false
+func (p *Player) Open(trend Trend, price decimal.Decimal) error {
+	sheets, err := p.client.Sheets(p.instrumentId, price)
+	if err != nil {
+		return err
 	}
-	if p.stats["history"] == nil {
-		return false
+	size, err := p.post("open", trend, price, sheets, nil)
+	if err != nil {
+		return err
 	}
-	history := p.stats["history"].([]decimal.Decimal)
-	if len(history) < 4 {
-		return false
-	}
-	if history[len(history)-1].GreaterThan(cur) {
-		return true
-	}
-	history = history[len(history)-4:]
-	flag := true
-	for i := range history {
-		flag = flag && history[i].IsNegative()
-	}
-	return flag
+	p.stats["size"] = size
+	p.stats["sheets"] = size
+	p.stats["trend"] = trend
+	p.stats["open_price"] = price
+	p.SetStatus(1)
+	glog.Infof("trend:%s sheets:%d open_price:%s 开仓成功!\n", &trend, sheets, &price)
+	return nil
 }
 
-func (p *Player) Stats() string {
-	if len(p.stats) == 0 {
-		return ""
+// return nil 进行下一跳
+func (p *Player) Close(price decimal.Decimal, neg bool) error {
+	sheets, err := p.client.Position(p.instrumentId)
+	if err != nil {
+		return err
 	}
-	arr := make([]string, 0, len(p.stats))
-	for k, v := range p.stats {
-		arr = append(arr, fmt.Sprintf("%s=%v", k, v))
+	if sheets == 0 {
+		p.SetStatus(0)
+		glog.Warningln("Player.Close sheets is zero!")
+		return nil
 	}
-	return strings.Join(arr, "   ")
+	trend := p.stats["trend"].(Trend)
+	openPrice := p.stats["open_price"].(decimal.Decimal)
+	size, err := p.post("close", trend, price, sheets, nil)
+	if err != nil {
+		return err
+	}
+	before := decimal.NewFromInt(size).Div(openPrice).Div(decimal.New(p.client.Leverage, -2))
+	after := decimal.NewFromInt(size).Div(price).Div(decimal.New(p.client.Leverage, -2))
+	diff := before.Sub(after).Abs()
+	if neg {
+		diff = diff.Neg()
+	}
+	glog.Infof("trend:%s sheets:%d close_price:%s 收益:%s 平仓成功!\n", &trend, size, &price, &diff)
+	p.Fee = p.Fee.Add(diff)
+	return nil
+}
+
+func (p *Player) Dump() {
+	glog.Infof("Dump: player profile:%s\n", &p.Fee)
+}
+
+func (p *Player) post(action string, trend Trend, price decimal.Decimal, size int64, after func()) (sheet int64, err error) {
+	typ := 0
+	switch action {
+	case "open":
+		typ = int(trend + 1)
+	case "close":
+		typ = int(trend + 3)
+	default:
+		panic("Unsupport action!")
+	}
+	f := func(orderid string) (sheet int64, ok bool) {
+		// 确认成交数量, 未全部成交需撤销剩余订单
+		var orderInfo *okex.BaseOrderInfo
+	query:
+		mustExecFunc(func() error {
+			var err error
+			orderInfo, err = p.client.OrderInfo(p.instrumentId, orderid)
+			return err
+		}, time.Second)
+		total, _ := decimal.NewFromString(orderInfo.Size)
+		qty, _ := decimal.NewFromString(orderInfo.FilledQty)
+		if qty.IsZero() {
+			return 0, false
+		}
+		switch orderInfo.Status {
+		case "-1", "2":
+		default:
+			if qty.LessThan(total) {
+				if err := p.client.Cancel(p.instrumentId, orderid); err != nil {
+					glog.Errorln("p.client.Cancel", err)
+				}
+			}
+			goto query
+		}
+		return qty.IntPart(), true
+	}
+	orderid, err := p.client.Post(p.instrumentId, &okex.BasePlaceOrderInfo{
+		ClientOid:  genRandClientId(),
+		Price:      price.String(),
+		MatchPrice: "0",
+		Type:       fmt.Sprintf("%d", typ),
+		Size:       fmt.Sprintf("%d", size),
+		OrderType:  "1",
+	})
+	if err != nil {
+		return
+	}
+	var ok bool
+	for range time.Tick(time.Second) {
+		if sheet, ok = f(orderid); ok {
+			break
+		}
+	}
+	if after != nil {
+		after()
+	}
+	return
 }
 
 func NewClient() *Client {
@@ -212,28 +224,8 @@ func (c *Client) Sheets(instrumentId string, price decimal.Decimal) (int64, erro
 	return sheets, nil
 }
 
-func (c *Client) Post(instrumentId string, step int, trend Trend, price decimal.Decimal, sheets int64) (string, error) {
-	typ := 0
-	switch trend {
-	case TREND_MANY:
-		typ = 1
-		if step == 1 {
-			typ = 3
-		}
-	case TREND_EMPTY:
-		typ = 2
-		if step == 1 {
-			typ = 4
-		}
-	}
-
-	result, err := c.client.PostSwapOrder(instrumentId, &okex.BasePlaceOrderInfo{
-		ClientOid:  genRandClientId(),
-		Price:      price.StringFixed(1),
-		MatchPrice: "1",
-		Type:       fmt.Sprintf("%d", typ),
-		Size:       fmt.Sprintf("%d", sheets),
-	})
+func (c *Client) Post(instrumentId string, info *okex.BasePlaceOrderInfo) (string, error) {
+	result, err := c.client.PostSwapOrder(instrumentId, info)
 	if err != nil {
 		return "", err
 	}
@@ -241,6 +233,68 @@ func (c *Client) Post(instrumentId string, step int, trend Trend, price decimal.
 		return "", fmt.Errorf("orderid is empty! result:%+v", result)
 	}
 	return result.OrderId, nil
+}
+
+func (c *Client) OrderInfo(instrumentId string, orderOrClientId string) (*okex.BaseOrderInfo, error) {
+	result, err := c.client.GetSwapOrderById(instrumentId, orderOrClientId)
+	if err != nil {
+		return nil, err
+	}
+	if result.OrderId == "" {
+		return nil, fmt.Errorf("orderid is empty! result:%+v", result)
+	}
+	return result, nil
+}
+
+func (c *Client) Cancel(instrumentId string, orderid string) error {
+	result, err := c.client.PostSwapCancelOrder(instrumentId, orderid)
+	if err != nil {
+		return err
+	}
+	if result.OrderId == "" {
+		return fmt.Errorf("orderid is empty! result:%+v", result)
+	}
+	return nil
+}
+
+func (c *Client) Position(instrumentId string) (int64, error) {
+	result, err := c.client.GetSwapPositionByInstrument(instrumentId)
+	if err != nil {
+		return 0, err
+	}
+	b, _ := json.Marshal(result)
+	if _, ok := result["holding"]; !ok {
+		return 0, fmt.Errorf("bad body! result:%+v", string(b))
+	}
+	val, _, _, err := jsonparser.Get(b, "holding")
+	if err != nil {
+		return 0, err
+	}
+	sheet := int64(0)
+	errs := make(chan error, 10)
+	_, err = jsonparser.ArrayEach(val, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+		if sheet == 0 {
+			availPosition, _ := jsonparser.GetString(value, "avail_position")
+			position, _ := jsonparser.GetString(value, "position")
+			ap, _ := decimal.NewFromString(availPosition)
+			p, _ := decimal.NewFromString(position)
+			if !ap.Equal(p) {
+				errs <- fmt.Errorf("position not equal avail_position! avail_position:%s position:%s", availPosition, position)
+				return
+			}
+			sheet = ap.IntPart()
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return 0, err
+		}
+	}
+	return sheet, nil
 }
 
 func (c *Client) MarkPrice(instrumentId string) (decimal.Decimal, error) {
@@ -259,8 +313,67 @@ func (c *Client) MarkPrice(instrumentId string) (decimal.Decimal, error) {
 	return markPrice, nil
 }
 
+func (c *Client) ServerTime() (time.Time, error) {
+	serverTime, err := c.client.GetServerTime()
+	if err != nil {
+		return time.Time{}, err
+	}
+	t, err := time.Parse(time.RFC3339, serverTime.Iso)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.In(time.UTC), nil
+}
+
+func (c *Client) AlgoOrder(instrumentId string, info *okex.BaseAlgoOrderInfo) (algoId string, err error) {
+	result, err := c.client.PostSwapAlgoOrder(instrumentId, info)
+	if err != nil {
+		return "", err
+	}
+	b, _ := json.Marshal(result)
+	if _, ok := result["data"]; !ok {
+		return "", fmt.Errorf("bad body! str:%s", string(b))
+	}
+	algoId, err = jsonparser.GetString(b, "data", "algo_id")
+	if err != nil {
+		return
+	}
+	if algoId == "-1" || algoId == "" {
+		return "", fmt.Errorf("error algo_id! id:%s", algoId)
+	}
+	return algoId, nil
+}
+
+func (c *Client) CancelAlgoOrder(instrumentId string, info *okex.BaseCancelAlgoOrderInfo) error {
+	result, err := c.client.PostSwapCancelAlgoOrder(instrumentId, info)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(result)
+	s, err := jsonparser.GetString(b, "data", "result")
+	if err != nil {
+		return err
+	}
+	if s != "success" {
+		return fmt.Errorf("result is not success! result:%s", result)
+	}
+	return nil
+}
+
 func genRandClientId() string {
 	return "a" + strconv.FormatInt(int64(rand.Int31()), 10)
+}
+
+func mustExecFunc(f func() error, d time.Duration) {
+	for {
+		err := f()
+		if err != nil {
+			glog.Infof("Exec %T failed! err:%v\n", f, err)
+			time.Sleep(d)
+			continue
+		}
+		return
+	}
 }
 
 func init() {

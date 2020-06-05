@@ -113,6 +113,8 @@ const (
 	SWAP_INSTRUMENT_ORDER_BY_ID             = "/api/swap/v3/orders/{instrument_id}/{order_client_id}"
 	SWAP_RATE                               = "/api/swap/v3/rate"
 	SWAP_ORDER                              = "/api/swap/v3/order"
+	SWAP_ORDER_Algo                         = "/api/swap/v3/order_algo"
+	SWAP_ORDER_Cancel_Algo                  = "/api/swap/v3/cancel_algos"
 	SWAP_ORDERS                             = "/api/swap/v3/orders"
 	SWAP_POSITION                           = "/api/swap/v3/position"
 

@@ -4,7 +4,7 @@ go 1.13
 
 require (
 	github.com/Kucoin/kucoin-go-sdk v1.2.2
-	github.com/deckarep/golang-set v1.7.1 // indirect
+	github.com/buger/jsonparser v1.0.0
 	github.com/go-openapi/errors v0.19.2
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/google/uuid v1.1.1
