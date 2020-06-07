@@ -14,9 +14,16 @@ import (
 	"time"
 )
 
+type Status int
+
+const (
+	STATUS_OK   Status = 0
+	STATUS_WAIT Status = 1
+)
+
 type Player struct {
 	instrumentId string
-	status       int // 0 等待开仓 1等待平仓
+	status       Status // 0 等待开仓 1等待平仓
 	stats        map[string]interface{}
 	Fee          decimal.Decimal
 	client       *Client
@@ -31,11 +38,11 @@ func NewPlayer(instrumentId string, client *Client) *Player {
 	return p
 }
 
-func (p *Player) SetStatus(i int) {
+func (p *Player) SetStatus(i Status) {
 	p.status = i
 }
 
-func (p *Player) Status() int {
+func (p *Player) Status() Status {
 	return p.status
 }
 
@@ -74,40 +81,48 @@ func (p *Player) Algo(ctx context.Context, trend Trend, price decimal.Decimal) e
 	return nil
 }
 
-func (p *Player) Open(trend Trend, price decimal.Decimal) error {
+func (p *Player) Open(trend Trend, price decimal.Decimal, maxRetry int) error {
 	sheets, err := p.client.Sheets(p.instrumentId, price)
 	if err != nil {
 		return err
 	}
-	size, err := p.post("open", trend, price, sheets, nil)
+	glog.Infof("开仓 trend:%s sheets:%d open_price:%s\n", &trend, sheets, &price)
+	size, err := p.post("open", trend, price, sheets, maxRetry, nil)
 	if err != nil {
 		return err
+	}
+	if size == 0 {
+		return fmt.Errorf("开仓失败, 张数为0! ")
 	}
 	p.stats["size"] = size
 	p.stats["sheets"] = size
 	p.stats["trend"] = trend
 	p.stats["open_price"] = price
-	p.SetStatus(1)
+	p.SetStatus(STATUS_WAIT)
 	glog.Infof("trend:%s sheets:%d open_price:%s 开仓成功!\n", &trend, sheets, &price)
 	return nil
 }
 
 // return nil 进行下一跳
-func (p *Player) Close(price decimal.Decimal, neg bool) error {
+func (p *Player) Close(price decimal.Decimal, maxRetry int, neg bool) error {
 	sheets, err := p.client.Position(p.instrumentId)
 	if err != nil {
 		return err
 	}
 	if sheets == 0 {
-		p.SetStatus(0)
+		p.SetStatus(STATUS_OK)
 		glog.Warningln("Player.Close sheets is zero!")
 		return nil
 	}
 	trend := p.stats["trend"].(Trend)
 	openPrice := p.stats["open_price"].(decimal.Decimal)
-	size, err := p.post("close", trend, price, sheets, nil)
+	glog.Infof("平仓 trend:%s sheets:%d close_price:%s\n", &trend, sheets, &price)
+	size, err := p.post("close", trend, price, sheets, maxRetry, nil)
 	if err != nil {
 		return err
+	}
+	if size == 0 {
+		return fmt.Errorf("平仓失败, size为0")
 	}
 	before := decimal.NewFromInt(size).Div(openPrice).Div(decimal.New(p.client.Leverage, -2))
 	after := decimal.NewFromInt(size).Div(price).Div(decimal.New(p.client.Leverage, -2))
@@ -124,7 +139,7 @@ func (p *Player) Dump() {
 	glog.Infof("Dump: player profile:%s\n", &p.Fee)
 }
 
-func (p *Player) post(action string, trend Trend, price decimal.Decimal, size int64, after func()) (sheet int64, err error) {
+func (p *Player) post(action string, trend Trend, price decimal.Decimal, size int64, maxRetry int, after func()) (sheet int64, err error) {
 	typ := 0
 	switch action {
 	case "open":
@@ -134,7 +149,7 @@ func (p *Player) post(action string, trend Trend, price decimal.Decimal, size in
 	default:
 		panic("Unsupport action!")
 	}
-	f := func(orderid string) (sheet int64, ok bool) {
+	f := func(orderid string, cancel bool) (sheet int64, ok bool) {
 		// 确认成交数量, 未全部成交需撤销剩余订单
 		var orderInfo *okex.BaseOrderInfo
 	query:
@@ -145,13 +160,13 @@ func (p *Player) post(action string, trend Trend, price decimal.Decimal, size in
 		}, time.Second)
 		total, _ := decimal.NewFromString(orderInfo.Size)
 		qty, _ := decimal.NewFromString(orderInfo.FilledQty)
-		if qty.IsZero() {
+		if !cancel && qty.IsZero() {
 			return 0, false
 		}
 		switch orderInfo.Status {
 		case "-1", "2":
 		default:
-			if qty.LessThan(total) {
+			if qty.LessThan(total) || cancel {
 				if err := p.client.Cancel(p.instrumentId, orderid); err != nil {
 					glog.Errorln("p.client.Cancel", err)
 				}
@@ -171,9 +186,18 @@ func (p *Player) post(action string, trend Trend, price decimal.Decimal, size in
 	if err != nil {
 		return
 	}
-	var ok bool
+	var (
+		ok    bool
+		count int
+	)
 	for range time.Tick(time.Second) {
-		if sheet, ok = f(orderid); ok {
+		count++
+		if maxRetry > 0 && count > maxRetry {
+			f(orderid, true)
+			return 0, nil
+		}
+		if sheet, ok = f(orderid, false); ok {
+			glog.Infof("开仓已全部成交 trend:%s size=%d sheet:%d\n", &trend, size, sheet)
 			break
 		}
 	}
@@ -220,7 +244,7 @@ func (c *Client) Sheets(instrumentId string, price decimal.Decimal) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	sheets := equity.Mul(decimal.New(c.Leverage, -2)).Mul(price).IntPart() - 3
+	sheets := equity.Mul(decimal.New(c.Leverage, -2)).Mul(price).IntPart() - 10
 	return sheets, nil
 }
 
@@ -295,6 +319,14 @@ func (c *Client) Position(instrumentId string) (int64, error) {
 		}
 	}
 	return sheet, nil
+}
+
+func (c *Client) FundingTime(instrumentId string) (time.Time, error) {
+	fundingTime, err := c.client.GetSwapFundingTimeByInstrument(instrumentId)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, fundingTime.FundingTime)
 }
 
 func (c *Client) MarkPrice(instrumentId string) (decimal.Decimal, error) {

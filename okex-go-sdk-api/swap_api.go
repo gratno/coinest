@@ -150,7 +150,7 @@ func (client *Client) PostSwapAlgoOrder(instrumentId string, order *BaseAlgoOrde
 func (client *Client) PostSwapCancelAlgoOrder(instrumentId string, order *BaseCancelAlgoOrderInfo) (map[string]interface{}, error) {
 	or := map[string]interface{}{}
 	info := CancelAlgoOrderInfo{*order, instrumentId}
-	if _, err := client.Request(POST, SWAP_ORDER_Algo, info, &or); err != nil {
+	if _, err := client.Request(POST, SWAP_ORDER_Cancel_Algo, info, &or); err != nil {
 		return nil, err
 	}
 	return or, nil

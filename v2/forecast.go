@@ -68,7 +68,7 @@ func (d *depth) Less(p depth) bool {
 type futureModel struct {
 }
 
-func (m *futureModel) Future(markPrice decimal.Decimal, asks, bids []depth) Trend {
+func (m *futureModel) Future(markPrice decimal.Decimal, asks, bids []depth) (Trend, decimal.Decimal) {
 	empty, many := asks[0], bids[0]
 	emptyMerge, manyMerge := empty.Clone(), many.Clone()
 	for i := 1; i < len(asks); i++ {
@@ -78,17 +78,21 @@ func (m *futureModel) Future(markPrice decimal.Decimal, asks, bids []depth) Tren
 		manyMerge = manyMerge.Add(bids[i])
 	}
 
+	unknownPrice := empty.Price()
+	if many.Sheet() > empty.Sheet() {
+		unknownPrice = many.Price()
+	}
 	if emptyMerge.Less(manyMerge) && many.Sheet() > 2000 {
 		if markPrice.GreaterThan(many.Price()) {
-			return TREND_UNKNOWN
+			return TREND_UNKNOWN, unknownPrice
 		}
-		return TREND_MANY
+		return TREND_MANY, many.Price()
 	}
 	if manyMerge.Less(emptyMerge) && empty.Sheet() > 2000 {
 		if markPrice.LessThan(empty.Price()) {
-			return TREND_UNKNOWN
+			return TREND_UNKNOWN, unknownPrice
 		}
-		return TREND_EMPTY
+		return TREND_EMPTY, empty.Price()
 	}
-	return TREND_UNKNOWN
+	return TREND_UNKNOWN, unknownPrice
 }
