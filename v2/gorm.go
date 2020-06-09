@@ -13,4 +13,5 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	db.LogMode(false)
 }

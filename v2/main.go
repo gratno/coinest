@@ -251,7 +251,7 @@ func (t *Task) Worker() {
 				if err := db.New().Create(model).Error; err != nil {
 					glog.Errorln(err)
 				}
-				return
+				continue
 				if t.current.IsZero() {
 					continue
 				}
