@@ -23,7 +23,7 @@ import (
 var (
 	currencyExchange = make(map[string]decimal.Decimal)
 	// 止损点
-	disloss float64 = 30
+	disloss float64 = 1000
 	// 止盈点
 	disgain float64 = 5
 )
@@ -74,22 +74,22 @@ type Task struct {
 	// 负亏损
 	Disloss decimal.Decimal
 	// 正收益
-	Disgain      decimal.Decimal
-	last         decimal.Decimal
-	current      decimal.Decimal
-	trend        *Trend
-	profile      decimal.Decimal
-	serverTime   time.Time
-	trf          bool
-	wsLock       sync.Mutex
-	WS           *okex.OKExV3Ws
-	client       *Client
-	markPrice    decimal.Decimal
-	markPriceMtx sync.RWMutex
-	nextFunding  *time.Time
+	Disgain        decimal.Decimal
+	last           decimal.Decimal
+	current        decimal.Decimal
+	trend          *Trend
+	profile        decimal.Decimal
+	serverTime     time.Time
+	wsLock         sync.Mutex
+	WS             *okex.OKExV3Ws
+	client         *Client
+	tickerPrice    decimal.Decimal
+	tickerPriceMtx sync.RWMutex
 
-	depthStream     chan []byte
-	markPriceStream chan []byte
+	fundingRate decimal.Decimal
+
+	depthStream  chan []byte
+	tickerStream chan []byte
 
 	apiBuilder *builder.APIBuilder
 	proxyUrl   string
@@ -100,8 +100,8 @@ func (t *Task) websocketSub() {
 	t.wsLock.Lock()
 	defer t.wsLock.Unlock()
 	ws := okex.NewOKExV3Ws(t.apiBuilder.Build(goex.OKEX_V3).(*okex.OKEx), t.WSRegister(map[string]chan<- []byte{
-		"depth5":     t.depthStream,
-		"mark_price": t.markPriceStream,
+		"depth5": t.depthStream,
+		"ticker": t.tickerStream,
 	}))
 	ws.ProxyUrl(t.proxyUrl)
 	if err := ws.Subscribe(map[string]interface{}{
@@ -133,7 +133,7 @@ func (t *Task) Init() {
 		panic("init server time failed!")
 	}
 	t.depthStream = make(chan []byte)
-	t.markPriceStream = make(chan []byte)
+	t.tickerStream = make(chan []byte)
 }
 
 func (t *Task) Now() time.Time {
@@ -141,16 +141,16 @@ func (t *Task) Now() time.Time {
 	return t.serverTime
 }
 
-func (t *Task) MarkPrice() decimal.Decimal {
-	t.markPriceMtx.RLock()
-	defer t.markPriceMtx.RUnlock()
-	return t.markPrice
+func (t *Task) TickerPrice() decimal.Decimal {
+	t.tickerPriceMtx.RLock()
+	defer t.tickerPriceMtx.RUnlock()
+	return t.tickerPrice
 }
 
-func (t *Task) SetMarkPrice(price decimal.Decimal) {
-	t.markPriceMtx.Lock()
-	t.markPrice = price
-	t.markPriceMtx.Unlock()
+func (t *Task) SetTickerPrice(price decimal.Decimal) {
+	t.tickerPriceMtx.Lock()
+	t.tickerPrice = price
+	t.tickerPriceMtx.Unlock()
 }
 
 func (t *Task) IsValidServerTime(timestamp string) bool {
@@ -168,7 +168,7 @@ func (t *Task) IsValidServerTime(timestamp string) bool {
 }
 
 func (t *Task) Worker() {
-	parseMarkPrice := func(data []byte) (price decimal.Decimal) {
+	parseTickerPrice := func(data []byte) (price decimal.Decimal) {
 		val, err := jsonparser.GetString(data, "last")
 		if err != nil {
 			glog.Errorln("jsonparser.GetString:mark_price", err)
@@ -202,18 +202,26 @@ func (t *Task) Worker() {
 
 	stop := make(chan struct{})
 	dumpTicker := time.NewTicker(30 * time.Second)
+	fundingRateTicker := time.NewTicker(time.Hour)
+	defer fundingRateTicker.Stop()
 	defer dumpTicker.Stop()
 	player := NewPlayer("BTC-USD-SWAP", t.client)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
 			select {
+			case <-fundingRateTicker.C:
+				if t.fundingRate.IsZero() {
+					if ft, err := t.client.FundingRate("BTC-USD-SWAP"); err == nil {
+						t.fundingRate = ft
+					}
+				}
 			case <-dumpTicker.C:
 				t.Dump()
 				player.Dump()
-			case data := <-t.markPriceStream:
-				if d := parseMarkPrice(data); !d.IsZero() {
-					t.SetMarkPrice(d)
+			case data := <-t.tickerStream:
+				if d := parseTickerPrice(data); !d.IsZero() {
+					t.SetTickerPrice(d)
 				}
 			}
 		}
@@ -233,12 +241,22 @@ func (t *Task) Worker() {
 				bidsb, _, _, _ := jsonparser.Get(data, "bids")
 				asks = parseDepth(asksb, asks)
 				bids = parseDepth(bidsb, bids)
-				//t.current = t.MarkPrice()
-				//if t.current.IsZero() {
-				//    continue
-				//}
-				future, nextPrice := t.Future(t.current, asks, bids)
-				t.current = nextPrice
+				t.current = t.TickerPrice()
+				model := &OkexReal{
+					Asks:        fmt.Sprintf("%v", asks),
+					Bids:        fmt.Sprintf("%v", bids),
+					Ticker:      t.current.String(),
+					FundingRate: t.fundingRate.String(),
+				}
+				if err := db.New().Create(model).Error; err != nil {
+					glog.Errorln(err)
+				}
+				return
+				if t.current.IsZero() {
+					continue
+				}
+				future, _ := t.Future(t.current, asks, bids)
+				//t.current = nextPrice
 				if t.trend != nil {
 					if ok, fee := t.Settlement(); ok {
 						glog.Infof("结算: trend:%s last:%s current:%s fee:%s asks:%v bids:%v\n", t.trend, t.last, t.current, fee, asks, bids)
@@ -251,7 +269,6 @@ func (t *Task) Worker() {
 						if player.Status() != STATUS_OK {
 							continue
 						}
-						t.nextFunding = nil
 						// 撤销止损单
 						cancel()
 						t.profile = t.profile.Add(fee)
@@ -263,12 +280,7 @@ func (t *Task) Worker() {
 				if future == TREND_UNKNOWN {
 					continue
 				}
-				if t.nextFunding == nil {
-					if ft, err := t.client.FundingTime("BTC-USD-SWAP"); err == nil {
-						t.nextFunding = &ft
-					}
-				}
-				glog.Infof("开始: trend:%s last:%s current:%s asks:%v bids:%v funding:%v\n", t.trend, t.last, t.current, asks, bids, t.nextFunding)
+				glog.Infof("开始: trend:%s last:%s current:%s asks:%v bids:%v \n", t.trend, t.last, t.current, asks, bids)
 				err := player.Open(future, t.current, 60)
 				if err != nil {
 					glog.Errorln("player.Open failed!", err)
@@ -277,8 +289,10 @@ func (t *Task) Worker() {
 				t.trend = &future
 				t.last = t.current
 				go func() {
-					if err := player.Algo(ctx, future, t.current); err != nil {
-						glog.Errorln("player.Algo", err)
+					if disloss < 1000 {
+						if err := player.Algo(ctx, future, t.current); err != nil {
+							glog.Errorln("player.Algo", err)
+						}
 					}
 				}()
 			case <-time.After(30 * time.Second):
@@ -342,7 +356,7 @@ func (t *Task) WSRegister(chs map[string]chan<- []byte) func(channel string, dat
 			b, _ := json.Marshal(res)
 			switch channel {
 			case "ticker":
-				chs["mark_price"] <- b
+				chs["ticker"] <- b
 			case "depth5":
 				chs["depth5"] <- b
 			}

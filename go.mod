@@ -9,6 +9,7 @@ require (
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/google/uuid v1.1.1
 	github.com/gorilla/websocket v1.4.2
+	github.com/jinzhu/gorm v1.9.12
 	github.com/json-iterator/go v1.1.7
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/nubo/jwt v0.0.0-20150918093313-da5b79c3bbaf

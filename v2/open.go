@@ -321,12 +321,12 @@ func (c *Client) Position(instrumentId string) (int64, error) {
 	return sheet, nil
 }
 
-func (c *Client) FundingTime(instrumentId string) (time.Time, error) {
+func (c *Client) FundingRate(instrumentId string) (decimal.Decimal, error) {
 	fundingTime, err := c.client.GetSwapFundingTimeByInstrument(instrumentId)
 	if err != nil {
-		return time.Time{}, err
+		return decimal.Decimal{}, err
 	}
-	return time.Parse(time.RFC3339, fundingTime.FundingTime)
+	return decimal.NewFromString(fundingTime.FundingRate)
 }
 
 func (c *Client) MarkPrice(instrumentId string) (decimal.Decimal, error) {
@@ -340,7 +340,7 @@ func (c *Client) MarkPrice(instrumentId string) (decimal.Decimal, error) {
 		return markPrice, err
 	}
 	if markPrice.IsZero() {
-		return markPrice, fmt.Errorf("markPrice.IsZero! data:%v", data)
+		return markPrice, fmt.Errorf("tickerPrice.IsZero! data:%v", data)
 	}
 	return markPrice, nil
 }
