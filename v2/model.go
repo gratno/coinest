@@ -11,3 +11,7 @@ type OkexReal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
+
+func init() {
+	db.AutoMigrate(&OkexReal{})
+}
